@@ -8,6 +8,22 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- `data.teleportconnect_cluster` — exposes the cluster name, server version, and
+  the cluster TLS CA bundle (`ca_certificate`). The CA is cluster-scoped, so it
+  can be written to a single file and reused as `sslrootcert` across many
+  database configurations.
+- `examples/modules/teleport-postgresql` — a reusable module that wires the
+  cluster CA, a `local_file`, and an ephemeral database certificate together for
+  the `cyrilgdn/postgresql` provider (verify-full TLS).
+
+### Changed
+
+- CI guide certificate path rewritten to pass the client certificate and key
+  inline via `clientcert.sslinline = true`, leaving only the public CA bundle on
+  disk (one `local_file` instead of three `local_sensitive_file`s).
+
 ## [0.1.0] - 2026-05-30
 
 Initial public release.

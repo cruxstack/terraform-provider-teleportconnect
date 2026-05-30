@@ -13,6 +13,7 @@ It is the in-process equivalent of common `tsh` workflows:
 | `ephemeral.teleportconnect_ssh_tunnel`     | `tsh ssh -N -L LOCAL:TARGET GATEWAY` |
 | `data.teleportconnect_database`            | `tsh db ls`                          |
 | `data.teleportconnect_node`                | `tsh ls`                             |
+| `data.teleportconnect_cluster`             | `tsh status` (cluster info + CA)     |
 
 Because credentials and tunnels are modeled as
 [ephemeral resources](https://developer.hashicorp.com/terraform/language/resources/ephemeral),

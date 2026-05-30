@@ -28,24 +28,23 @@ ephemeral "teleportconnect_db_tunnel" "main" {
 }
 
 provider "postgresql" {
-  host     = ephemeral.teleportconnect_db_tunnel.main.local_host
-  port     = ephemeral.teleportconnect_db_tunnel.main.local_port
-  database = "appdb"
-  username = "ci"
-  sslmode  = "disable" # the tunnel terminates TLS to Teleport for you
+  host      = ephemeral.teleportconnect_db_tunnel.main.local_host
+  port      = ephemeral.teleportconnect_db_tunnel.main.local_port
+  database  = "appdb"
+  username  = "ci"
+  sslmode   = "disable" # the tunnel terminates TLS to Teleport for you
   superuser = false
 }
 ```
 
-Why the tunnel rather than the certificate resource? The `cyrilgdn/postgresql`
-provider's `clientcert.cert`, `clientcert.key`, and `sslrootcert` arguments
-expect **file paths**, so the certificate path forces you to materialize PEM
-material to disk during the run. The tunnel avoids that entirely: Terraform
-connects to `localhost`, the certificate never leaves the provider process,
-and nothing sensitive is written to disk or to Terraform state.
+Why the tunnel rather than the certificate resource? The tunnel writes
+**nothing** to disk — Terraform connects to `localhost` and Teleport does the
+TLS termination in-process — and the `postgresql` provider connects with
+`sslmode = "disable"`, so there is no CA file to manage. The certificate path
+(below) needs one file on disk for the CA bundle.
 
 (If you specifically need end-to-end verify-full TLS, see the
-[certificate-based path](#appendix-certificate-based-path) appendix.)
+[certificate path](#certificate-path-verify-full-tls) section.)
 
 ## One-time prerequisites (off the runner)
 
@@ -312,31 +311,35 @@ Common failures:
   single `terraform` invocation. If you split `plan` and `apply` across jobs,
   each opens its own tunnel.
 
-## Appendix: certificate-based path
+## Certificate path (verify-full TLS)
 
-If you need end-to-end verify-full TLS (rather than the tunnel), issue a
-certificate and materialize it to disk for `cyrilgdn/postgresql`:
+When policy requires end-to-end verify-full TLS rather than the in-process
+tunnel, issue a certificate instead. The `cyrilgdn/postgresql` provider can
+take the client **certificate and key inline** (`clientcert.sslinline = true`),
+so the only thing you write to disk is the **public CA bundle** for
+`sslrootcert` (which is path-only). Nothing sensitive lands on disk.
+
+### Bare-bones pattern
 
 ```hcl
+data "teleportconnect_cluster" "this" {}
+
+data "teleportconnect_database" "main" {
+  name = "mycorp-postgres"
+}
+
 ephemeral "teleportconnect_db_certificate" "main" {
   database = data.teleportconnect_database.main.matched_name
   db_user  = "ci"
   db_name  = "appdb"
 }
 
-resource "local_sensitive_file" "ca" {
-  filename = "${path.module}/.tls/ca.pem"
-  content  = ephemeral.teleportconnect_db_certificate.main.ca_certificate
-}
-
-resource "local_sensitive_file" "cert" {
-  filename = "${path.module}/.tls/cert.pem"
-  content  = ephemeral.teleportconnect_db_certificate.main.certificate
-}
-
-resource "local_sensitive_file" "key" {
-  filename = "${path.module}/.tls/key.pem"
-  content  = ephemeral.teleportconnect_db_certificate.main.private_key
+# Only the public CA bundle is written to disk. It lives under .terraform/,
+# which Terraform already ignores. The CA is cluster-scoped, so fetch it from
+# the cluster data source once and reuse the path for every database.
+resource "local_file" "teleport_ca" {
+  filename = "${path.root}/.terraform/teleport-ca/teleport-ca.pem"
+  content  = data.teleportconnect_cluster.this.ca_certificate
 }
 
 provider "postgresql" {
@@ -345,15 +348,74 @@ provider "postgresql" {
   database    = "appdb"
   username    = "ci"
   sslmode     = "verify-full"
-  sslrootcert = local_sensitive_file.ca.filename
+  sslrootcert = local_file.teleport_ca.filename
 
   clientcert {
-    cert = local_sensitive_file.cert.filename
-    key  = local_sensitive_file.key.filename
+    cert      = ephemeral.teleportconnect_db_certificate.main.certificate
+    key       = ephemeral.teleportconnect_db_certificate.main.private_key
+    sslinline = true
   }
 }
 ```
 
-This writes the cert/key/CA to the working directory. Add a cleanup step to
-your workflow (`rm -rf .tls`) and ensure the path is never committed or
-cached.
+### Module pattern
+
+The repo ships an `examples/modules/teleport-postgresql` module that bundles
+the cluster data source, the CA `local_file`, and the ephemeral certificate
+behind a small interface:
+
+```hcl
+module "pg_appdb" {
+  source = "./modules/teleport-postgresql"
+
+  database = "mycorp-postgres"
+  db_user  = "ci"
+  db_name  = "appdb"
+}
+
+provider "postgresql" {
+  host        = module.pg_appdb.host
+  port        = module.pg_appdb.port
+  database    = module.pg_appdb.db_name
+  username    = module.pg_appdb.db_user
+  sslmode     = "verify-full"
+  sslrootcert = module.pg_appdb.sslrootcert
+
+  clientcert {
+    cert      = module.pg_appdb.certificate
+    key       = module.pg_appdb.private_key
+    sslinline = true
+  }
+}
+```
+
+### Why doesn't the provider write the CA file itself?
+
+A provider *can* technically write files from an ephemeral resource's `Open`
+(the framework does not sandbox the filesystem), but `teleportconnect_db_certificate`
+deliberately does not, because it would not actually reduce the on-disk
+footprint and it weakens the lifecycle guarantees:
+
+- **Cleanup is worse, not better.** An ephemeral resource's `Open` is
+  guaranteed to run, but its `Close` is best-effort — a cancelled job, a
+  `SIGKILL`, or a crash skips it, leaving the file behind. A `local_file`
+  resource is tracked by Terraform and removed on `destroy`, so it cleans up
+  more reliably than a provider-side write would.
+- **The provider can't know where to write.** `path.root` / `path.module` are
+  resolved by Terraform before the value ever reaches the provider, and the
+  provider's working directory is sandboxed or redirected under HCP Terraform,
+  `terraform -chdir`, Atlantis, and similar. You would have to pass an explicit
+  path anyway — at which point a file exists on disk either way.
+
+So the file is unavoidable *if* you use the certificate path, because
+`sslrootcert` is path-only. Writing it from `local_file` keeps the path
+explicit and Terraform-managed. The CA is public trust material, so `local_file`
+(not `local_sensitive_file`) is correct; the secret cert/key never touch disk —
+they stay in memory and are passed inline via `sslinline = true`.
+
+**Want zero files on disk?** Use the [tunnel pattern](#recommended-pattern-db_tunnel--sslmodedisable)
+instead. With `teleportconnect_db_tunnel` the `postgresql` provider connects to
+`localhost` with `sslmode = "disable"`, so there is no CA file and no
+`local_file` resource at all — nothing is written to the runner. On an
+ephemeral CI runner that is the cleanest option; reserve the certificate path
+for when policy mandates end-to-end verify-full TLS.

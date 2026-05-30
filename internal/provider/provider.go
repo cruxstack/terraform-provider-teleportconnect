@@ -268,6 +268,7 @@ func (p *teleportconnectProvider) Resources(_ context.Context) []func() resource
 
 func (p *teleportconnectProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
+		newDataCluster,
 		newDataDatabase,
 		newDataNode,
 	}
