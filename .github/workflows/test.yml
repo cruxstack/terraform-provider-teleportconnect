@@ -116,6 +116,22 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Pre-pull container images
+        # public.ecr.aws and Docker Hub apply anonymous pull rate limits that
+        # can intermittently fail `compose up`. Pull the images up front with
+        # retries so a transient "toomanyrequests" does not fail the job.
+        run: |
+          images=$(grep -E '^\s*image:' test/integration/docker-compose.yml | awk '{print $2}')
+          for img in $images; do
+            for attempt in 1 2 3 4 5; do
+              if docker pull "$img"; then
+                break
+              fi
+              echo "pull of $img failed (attempt $attempt); retrying in $((attempt * 15))s"
+              sleep $((attempt * 15))
+            done
+          done
+
       - name: Start Teleport + Postgres
         # Single-node Teleport (v18) plus a Postgres target. The compose file
         # registers a db_service (appdb-postgres) and an SSH node labeled
