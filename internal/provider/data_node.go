@@ -13,14 +13,13 @@ import (
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
-// Compile-time interface assertions.
 var (
 	_ datasource.DataSource              = (*dataNode)(nil)
 	_ datasource.DataSourceWithConfigure = (*dataNode)(nil)
 )
 
-// dataNode looks up a Teleport SSH node by hostname and/or labels. It is
-// the in-process equivalent of `tsh ls --query 'labels[...] == ...'`.
+// dataNode looks up a Teleport SSH node by hostname and/or labels, like
+// `tsh ls`.
 type dataNode struct {
 	pd *ProviderData
 }
@@ -149,7 +148,6 @@ func (d *dataNode) Read(ctx context.Context, req datasource.ReadRequest, resp *d
 			fmt.Sprintf("No node matched hostname=%q labels=%v.", wantHostname, wantLabels))
 		return
 	case 1:
-		// ok
 	default:
 		hostnames := make([]string, 0, len(matches))
 		for _, m := range matches {

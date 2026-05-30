@@ -14,23 +14,19 @@ import (
 	"github.com/cruxstack/terraform-provider-teleportconnect/internal/tunnel"
 )
 
-// Compile-time interface assertions.
 var (
 	_ ephemeral.EphemeralResource              = (*ephemeralSSHTunnel)(nil)
 	_ ephemeral.EphemeralResourceWithConfigure = (*ephemeralSSHTunnel)(nil)
 	_ ephemeral.EphemeralResourceWithClose     = (*ephemeralSSHTunnel)(nil)
 )
 
-// ephemeralSSHTunnel opens a local TCP listener that proxies connections
-// through a Teleport-managed SSH gateway node to an arbitrary host:port
-// reachable from that gateway. This is the in-process equivalent of
-// `tsh ssh -N -L LOCAL:TARGET_HOST:TARGET_PORT GATEWAY`.
+// ephemeralSSHTunnel opens a local TCP listener proxied through a Teleport SSH
+// gateway node to a target host:port: the in-process equivalent of
+// `tsh ssh -N -L LOCAL:TARGET GATEWAY`.
 //
-// NOTE: schema and wiring are complete and the package builds, but this
-// resource has not been smoke-tested against a live SSH gateway. The
-// underlying tunnel/ssh.go layers proxy.NewClient -> ssh.NewClientConn ->
-// direct-tcpip and may need real-world tuning around host-key
-// verification edge cases.
+// Its acceptance test (TestAccEphemeralSSHTunnel_basic, opt-in via
+// TC_SSH_TUNNEL_ACCTEST) needs a live gateway under real Terraform; the
+// in-process plugintest harness 403s the host dial, so it is skipped there.
 type ephemeralSSHTunnel struct {
 	pd *ProviderData
 }
@@ -141,12 +137,9 @@ func (e *ephemeralSSHTunnel) Open(ctx context.Context, req ephemeral.OpenRequest
 		}
 		ttl = d
 	}
-	// routeCluster is the cert RouteToCluster: empty means "home cluster".
 	routeCluster := stringOrDefault(data.Cluster.ValueString(), e.pd.Cluster)
-	// dialCluster is what the proxy transport's DialHost needs: a concrete
-	// cluster name. Fall back to the proxy's own cluster (resolved at
-	// configure time) when no override is set, since an empty cluster makes
-	// DialHost return 403.
+	// DialHost needs a concrete cluster; an empty one 403s, so fall back to
+	// the proxy's own cluster.
 	dialCluster := stringOrDefault(routeCluster, e.pd.ClusterName)
 
 	tflog.Info(ctx, "issuing ssh certificate", map[string]any{

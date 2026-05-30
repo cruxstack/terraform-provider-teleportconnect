@@ -11,17 +11,13 @@ import (
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
-// Compile-time interface assertions.
 var (
 	_ datasource.DataSource              = (*dataCluster)(nil)
 	_ datasource.DataSourceWithConfigure = (*dataCluster)(nil)
 )
 
-// dataCluster exposes cluster-scoped metadata: the cluster name, server
-// version, and the TLS CA bundle. The CA bundle is the same for every
-// database in the cluster, so exposing it here lets callers write it to a
-// single file (e.g. for a database provider's sslrootcert) and reuse the
-// path across many database configurations.
+// dataCluster exposes cluster metadata: name, server version, and the TLS CA
+// bundle (shared by every database, so callers can write it once and reuse it).
 type dataCluster struct {
 	pd *ProviderData
 }

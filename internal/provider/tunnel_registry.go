@@ -6,18 +6,14 @@ import (
 	"sync"
 )
 
-// Closer is the minimal interface tracked tunnels must satisfy. Both
-// *tunnel.DBTunnel and *tunnel.SSHTunnel implement Close() error.
+// Closer is the minimal interface tracked tunnels satisfy.
 type Closer interface {
 	Close() error
 }
 
-// TunnelRegistry tracks active in-process tunnels so that an ephemeral
-// resource's Close handler can locate the right listener to shut down.
-//
-// Lifetimes: a tunnel is registered during ephemeral.Open and removed
-// during ephemeral.Close. Registered tunnels are also closed defensively
-// at provider shutdown to avoid leaks if Close is somehow skipped.
+// TunnelRegistry tracks active tunnels so an ephemeral resource's Close can
+// find the right listener. Registered during Open, removed during Close, and
+// closed defensively at shutdown.
 type TunnelRegistry struct {
 	mu      sync.Mutex
 	tunnels map[string]Closer

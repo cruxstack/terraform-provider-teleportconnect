@@ -6,23 +6,12 @@ import (
 	"os"
 )
 
-// gitlabTokenEnvVar is the environment variable the provider reads the GitLab
-// ID token from. GitLab CI populates it when the job declares an `id_tokens`
-// block, e.g.:
-//
-//	job:
-//	  id_tokens:
-//	    TELEPORT_ID_TOKEN:
-//	      aud: https://teleport.example.com
-//
-// The name can be overridden with TELEPORT_GITLAB_ID_TOKEN_ENV for pipelines
-// that already use a differently-named id_tokens entry.
+// gitlabTokenEnvVar is the default id_tokens var the GitLab job must declare
+// (with the audience set there). Override with TELEPORT_GITLAB_ID_TOKEN_ENV.
 const gitlabTokenEnvVar = "TELEPORT_ID_TOKEN"
 
-// fetchGitLab reads the GitLab CI OIDC token from the environment. GitLab does
-// not have a request endpoint like GitHub; the token is injected as an
-// environment variable named by the job's `id_tokens` block, so the audience
-// is configured there rather than here.
+// fetchGitLab reads the GitLab CI OIDC token from the environment; the
+// audience is configured in the job's id_tokens block, not here.
 func fetchGitLab(_ context.Context, _ string) (string, error) {
 	envName := os.Getenv("TELEPORT_GITLAB_ID_TOKEN_ENV")
 	if envName == "" {
@@ -31,8 +20,7 @@ func fetchGitLab(_ context.Context, _ string) (string, error) {
 	if v := os.Getenv(envName); v != "" {
 		return v, nil
 	}
-	// Legacy fallback for older GitLab versions.
-	if v := os.Getenv("CI_JOB_JWT_V2"); v != "" {
+	if v := os.Getenv("CI_JOB_JWT_V2"); v != "" { // legacy GitLab
 		return v, nil
 	}
 	return "", fmt.Errorf(

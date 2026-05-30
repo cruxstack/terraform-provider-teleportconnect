@@ -23,25 +23,19 @@ import (
 	"github.com/cruxstack/terraform-provider-teleportconnect/internal/auth/idtoken"
 )
 
-// alpnProxyGRPCInsecure is the ALPN protocol value the Teleport proxy uses to
-// route an unauthenticated gRPC connection (used here to reach the
-// JoinService before we hold any credentials). The value is part of the
-// proxy's public protocol contract; it is defined in the GPL-licensed
-// lib/srv/alpnproxy/common/protocols.go (ProtocolProxyGRPCInsecure) in the
-// upstream Teleport tree, so it is reproduced here as a constant rather than
-// imported, to keep this provider clear of the GPL/AGPL portions of Teleport.
-// If upstream renames it, delegated joins break until this is updated.
+// alpnProxyGRPCInsecure routes an unauthenticated gRPC connection to the
+// JoinService (before we hold credentials). Hardcoded rather than imported so
+// this provider need not link Teleport's GPL/AGPL packages; the value lives
+// upstream as ProtocolProxyGRPCInsecure in lib/srv/alpnproxy/common.
 const alpnProxyGRPCInsecure = "teleport-proxy-grpc"
 
-// joinResultTTL is the requested validity of the certificates issued by the
-// JoinService when joining as a bot. The auth server may clamp this to the
-// join token's configured max TTL.
+// joinResultTTL is the requested cert validity; the auth server may clamp it
+// to the join token's max TTL.
 const joinResultTTL = time.Hour
 
-// credentialsFromJoin performs a delegated (OIDC-family) join against the
-// Teleport proxy's JoinService and returns API credentials built from the
-// issued certificates. It is the in-process equivalent of a one-shot tbot
-// run, implemented entirely against the Apache-2.0 api/ module.
+// credentialsFromJoin performs a delegated (OIDC-family) join and returns API
+// credentials from the issued certs: the in-process equivalent of a one-shot
+// tbot run, built only against the Apache-2.0 api/ module.
 func (c Config) credentialsFromJoin(ctx context.Context) ([]tpclient.Credentials, error) {
 	if !idtoken.IsSupported(c.JoinMethod) {
 		return nil, fmt.Errorf("join_method %q is not supported; supported methods: %s", c.JoinMethod, strings.Join(idtoken.Supported(), ", "))
@@ -57,8 +51,7 @@ func (c Config) credentialsFromJoin(ctx context.Context) ([]tpclient.Credentials
 		return nil, err
 	}
 
-	// Fresh ECDSA P-256 keypair; the public half is signed by the cluster,
-	// the private half stays in memory and backs the returned credentials.
+	// The cluster signs the public half; the private half backs the creds.
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generating private key: %w", err)
@@ -100,8 +93,7 @@ func (c Config) credentialsFromJoin(ctx context.Context) ([]tpclient.Credentials
 }
 
 // dialJoinService opens an unauthenticated gRPC connection to the proxy's
-// JoinService over the ALPN-routed proxy port. The returned close function
-// must be called to release the connection.
+// JoinService over the ALPN-routed proxy port. Call the returned func to close.
 func (c Config) dialJoinService(ctx context.Context) (*tpclient.JoinServiceClient, func(), error) {
 	host := hostOnly(c.ProxyAddress)
 
@@ -120,8 +112,7 @@ func (c Config) dialJoinService(ctx context.Context) (*tpclient.JoinServiceClien
 		tlsConfig.RootCAs = pool
 	}
 
-	// The proxy may sit behind an L7 LB that requires the HTTPS connection
-	// upgrade before ALPN routing works. Probe once (cheap) unless insecure.
+	// Probe for the HTTPS upgrade L7-LB-fronted proxies need before routing.
 	upgradeRequired := tpclient.IsALPNConnUpgradeRequired(ctx, c.ProxyAddress, c.Insecure)
 	dialer := tpclient.NewALPNDialer(tpclient.ALPNDialerConfig{
 		DialTimeout:             15 * time.Second,
@@ -132,8 +123,8 @@ func (c Config) dialJoinService(ctx context.Context) (*tpclient.JoinServiceClien
 
 	conn, err := grpc.NewClient(
 		c.ProxyAddress,
-		// TLS is handled by the ALPN dialer; the gRPC transport itself runs
-		// over the already-encrypted conn, so transport creds are insecure.
+		// The ALPN dialer already encrypts the conn, so gRPC's own transport
+		// creds are insecure.
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
 			return dialer.DialContext(ctx, "tcp", addr)

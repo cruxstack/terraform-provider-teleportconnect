@@ -13,18 +13,14 @@ import (
 	"github.com/cruxstack/terraform-provider-teleportconnect/internal/dbcerts"
 )
 
-// Compile-time interface assertions.
 var (
 	_ ephemeral.EphemeralResource              = (*ephemeralDBCertificate)(nil)
 	_ ephemeral.EphemeralResourceWithConfigure = (*ephemeralDBCertificate)(nil)
 )
 
-// ephemeralDBCertificate issues a short-lived TLS client certificate for a
-// Teleport-protected database, plus the proxy host:port and trust bundle
-// needed to connect through the proxy via TLS routing.
-//
-// This is the Go-native equivalent of `tsh db login` + `tsh db config`,
-// without writing anything to disk and without requiring tsh on the runner.
+// ephemeralDBCertificate issues a short-lived TLS client cert for a Teleport
+// database plus the proxy host:port and trust bundle to connect via TLS
+// routing: the in-process equivalent of `tsh db login` + `tsh db config`.
 type ephemeralDBCertificate struct {
 	pd *ProviderData
 }

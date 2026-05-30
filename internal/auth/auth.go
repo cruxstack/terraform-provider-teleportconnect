@@ -13,38 +13,24 @@ import (
 	"github.com/gravitational/teleport/api/client"
 )
 
-// Config is the resolved provider configuration relevant to authentication.
-// Exactly one of the auth-mode fields must be populated; Validate() enforces
-// that.
+// Config is the resolved authentication configuration. Validate enforces that
+// exactly one auth mode is set.
 type Config struct {
-	// ProxyAddress is the Teleport proxy host:port. Required for every
-	// auth mode.
 	ProxyAddress string
+	Cluster      string // leaf-cluster override; empty means the proxy's own cluster
 
-	// Cluster is the optional leaf-cluster name for trusted-cluster
-	// routing. Empty means "the cluster the proxy belongs to".
-	Cluster string
-
-	// Auth-mode fields. Validate() requires exactly one to be set.
 	IdentityFilePath string
 	IdentityFileData string
 	UseLocalProfile  bool
 
-	// JoinMethod / JoinToken select a delegated (OIDC-family) Machine ID
-	// join: the provider fetches the platform's identity token and joins
-	// the cluster in-process, with no identity file or tbot sidecar.
-	// Supported methods: github, gitlab, kubernetes, spacelift.
-	JoinMethod string
-	JoinToken  string
-	// JoinAudience overrides the expected audience claim of the identity
-	// token. Empty defaults to the proxy host.
-	JoinAudience string
+	// JoinMethod/JoinToken select a delegated (OIDC-family) join: fetch the
+	// platform's identity token and join in-process, no identity file or
+	// tbot. One of: github, gitlab, kubernetes, spacelift.
+	JoinMethod   string
+	JoinToken    string
+	JoinAudience string // expected aud claim; empty defaults to the proxy host
 
-	// Insecure disables proxy TLS verification (maps to the Teleport
-	// SDK's InsecureAddressDiscovery, equivalent to `tsh --insecure`).
-	// Should never be true outside of local development against a
-	// self-signed cluster.
-	Insecure bool
+	Insecure bool // disables proxy TLS verification; dev clusters only
 }
 
 // Validate ensures the configuration has the minimum required fields and
@@ -72,12 +58,10 @@ func (c Config) Validate() error {
 	case 0:
 		return errors.New("one of identity_file_path, identity_file_data, use_local_profile, or join_method+join_token must be set")
 	case 1:
-		// ok
 	default:
 		return fmt.Errorf("multiple auth methods set: %s; pick exactly one", strings.Join(modes, ", "))
 	}
 
-	// join_method and join_token must be set together.
 	if (c.JoinMethod != "") != (c.JoinToken != "") {
 		return errors.New("join_method and join_token must both be set")
 	}
@@ -115,8 +99,7 @@ func Build(ctx context.Context, c Config) (*client.Client, error) {
 func (c Config) credentials(ctx context.Context) ([]client.Credentials, error) {
 	switch {
 	case c.UseLocalProfile:
-		// Empty dir => SDK default ~/.tsh. The profile is matched by the
-		// proxy host derived from proxy_address.
+		// Empty dir => SDK default ~/.tsh, matched by the proxy host.
 		return []client.Credentials{client.LoadProfile("", profileNameFromProxy(c.ProxyAddress))}, nil
 
 	case c.IdentityFilePath != "":
@@ -126,18 +109,13 @@ func (c Config) credentials(ctx context.Context) ([]client.Credentials, error) {
 		return []client.Credentials{client.LoadIdentityFileFromString(c.IdentityFileData)}, nil
 
 	case c.JoinMethod != "":
-		// Delegated OIDC-family join: fetch the platform identity token and
-		// exchange it with the proxy's JoinService for short-lived certs.
 		return c.credentialsFromJoin(ctx)
 	}
 	return nil, errors.New("no credentials configured")
 }
 
-// profileNameFromProxy extracts the host portion of a host:port string.
-// Profile files in ~/.tsh are named after the proxy host, e.g.
-// `~/.tsh/teleport.example.com.yaml`. Uses net.SplitHostPort so IPv6
-// literals (e.g. "[::1]:443") are handled correctly; falls back to the raw
-// address when there is no port.
+// profileNameFromProxy returns the host portion of addr, which is how ~/.tsh
+// profiles are named (e.g. teleport.example.com.yaml).
 func profileNameFromProxy(addr string) string {
 	if host, _, err := net.SplitHostPort(addr); err == nil {
 		return host
