@@ -30,6 +30,16 @@ type Config struct {
 	IdentityFileData string
 	UseLocalProfile  bool
 
+	// JoinMethod / JoinToken select a delegated (OIDC-family) Machine ID
+	// join: the provider fetches the platform's identity token and joins
+	// the cluster in-process, with no identity file or tbot sidecar.
+	// Supported methods: github, gitlab, kubernetes, spacelift.
+	JoinMethod string
+	JoinToken  string
+	// JoinAudience overrides the expected audience claim of the identity
+	// token. Empty defaults to the proxy host.
+	JoinAudience string
+
 	// Insecure disables proxy TLS verification (maps to the Teleport
 	// SDK's InsecureAddressDiscovery, equivalent to `tsh --insecure`).
 	// Should never be true outside of local development against a
@@ -54,14 +64,22 @@ func (c Config) Validate() error {
 	if c.UseLocalProfile {
 		modes = append(modes, "use_local_profile")
 	}
+	if c.JoinMethod != "" || c.JoinToken != "" {
+		modes = append(modes, "join_method+join_token")
+	}
 
 	switch len(modes) {
 	case 0:
-		return errors.New("one of identity_file_path, identity_file_data, or use_local_profile must be set")
+		return errors.New("one of identity_file_path, identity_file_data, use_local_profile, or join_method+join_token must be set")
 	case 1:
 		// ok
 	default:
 		return fmt.Errorf("multiple auth methods set: %s; pick exactly one", strings.Join(modes, ", "))
+	}
+
+	// join_method and join_token must be set together.
+	if (c.JoinMethod != "") != (c.JoinToken != "") {
+		return errors.New("join_method and join_token must both be set")
 	}
 
 	return nil
@@ -74,7 +92,7 @@ func Build(ctx context.Context, c Config) (*client.Client, error) {
 		return nil, err
 	}
 
-	creds, err := c.credentials()
+	creds, err := c.credentials(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +112,7 @@ func Build(ctx context.Context, c Config) (*client.Client, error) {
 }
 
 // credentials maps a Config to the Teleport SDK's Credentials slice.
-func (c Config) credentials() ([]client.Credentials, error) {
+func (c Config) credentials(ctx context.Context) ([]client.Credentials, error) {
 	switch {
 	case c.UseLocalProfile:
 		// Empty dir => SDK default ~/.tsh. The profile is matched by the
@@ -106,6 +124,11 @@ func (c Config) credentials() ([]client.Credentials, error) {
 
 	case c.IdentityFileData != "":
 		return []client.Credentials{client.LoadIdentityFileFromString(c.IdentityFileData)}, nil
+
+	case c.JoinMethod != "":
+		// Delegated OIDC-family join: fetch the platform identity token and
+		// exchange it with the proxy's JoinService for short-lived certs.
+		return c.credentialsFromJoin(ctx)
 	}
 	return nil, errors.New("no credentials configured")
 }

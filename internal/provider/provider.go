@@ -92,6 +92,9 @@ type providerModel struct {
 	IdentityFilePath types.String `tfsdk:"identity_file_path"`
 	IdentityFileData types.String `tfsdk:"identity_file_data"`
 	UseLocalProfile  types.Bool   `tfsdk:"use_local_profile"`
+	JoinMethod       types.String `tfsdk:"join_method"`
+	JoinToken        types.String `tfsdk:"join_token"`
+	JoinAudience     types.String `tfsdk:"join_audience"`
 	Insecure         types.Bool   `tfsdk:"insecure"`
 	ALPNConnUpgrade  types.String `tfsdk:"alpn_conn_upgrade"`
 }
@@ -127,6 +130,18 @@ func (p *teleportconnectProvider) Schema(_ context.Context, _ provider.SchemaReq
 			"use_local_profile": schema.BoolAttribute{
 				Optional:    true,
 				Description: "If true, reuse the local ~/.tsh profile for the configured proxy_address. Mirrors the developer's `tsh login` session.",
+			},
+			"join_method": schema.StringAttribute{
+				Optional:    true,
+				Description: "Delegated Machine ID join method for CI. The provider fetches the platform's OIDC/JWT identity token and joins the cluster in-process (no identity file or tbot sidecar). One of: github, gitlab, kubernetes, spacelift. Requires join_token. Mutually exclusive with the other auth modes.",
+			},
+			"join_token": schema.StringAttribute{
+				Optional:    true,
+				Description: "Name of the Teleport join token to use with join_method.",
+			},
+			"join_audience": schema.StringAttribute{
+				Optional:    true,
+				Description: "Expected audience claim of the identity token for join_method. Defaults to the proxy host. For GitHub this is requested explicitly; for other platforms it must match how the token is minted.",
 			},
 			"insecure": schema.BoolAttribute{
 				Optional:    true,
@@ -191,6 +206,9 @@ func (p *teleportconnectProvider) Configure(ctx context.Context, req provider.Co
 		IdentityFilePath: cfg.IdentityFilePath.ValueString(),
 		IdentityFileData: cfg.IdentityFileData.ValueString(),
 		UseLocalProfile:  cfg.UseLocalProfile.ValueBool(),
+		JoinMethod:       cfg.JoinMethod.ValueString(),
+		JoinToken:        cfg.JoinToken.ValueString(),
+		JoinAudience:     cfg.JoinAudience.ValueString(),
 		Insecure:         cfg.Insecure.ValueBool(),
 	}
 
@@ -204,6 +222,7 @@ func (p *teleportconnectProvider) Configure(ctx context.Context, req provider.Co
 		"cluster":           authCfg.Cluster,
 		"use_local_profile": authCfg.UseLocalProfile,
 		"identity_file":     authCfg.IdentityFilePath != "" || authCfg.IdentityFileData != "",
+		"join_method":       authCfg.JoinMethod,
 	})
 
 	clt, err := auth.Build(ctx, authCfg)

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -46,6 +47,30 @@ func TestConfigValidate(t *testing.T) {
 			name:    "whitespace proxy address",
 			cfg:     Config{ProxyAddress: "   ", UseLocalProfile: true},
 			wantErr: "proxy_address is required",
+		},
+		{
+			name: "join method + token ok",
+			cfg:  Config{ProxyAddress: "teleport.example.com:443", JoinMethod: "github", JoinToken: "ci"},
+		},
+		{
+			name:    "join method without token",
+			cfg:     Config{ProxyAddress: "teleport.example.com:443", JoinMethod: "github"},
+			wantErr: "join_method and join_token must both be set",
+		},
+		{
+			name:    "join token without method",
+			cfg:     Config{ProxyAddress: "teleport.example.com:443", JoinToken: "ci"},
+			wantErr: "join_method and join_token must both be set",
+		},
+		{
+			name: "join + identity file is multiple modes",
+			cfg: Config{
+				ProxyAddress:     "teleport.example.com:443",
+				JoinMethod:       "github",
+				JoinToken:        "ci",
+				IdentityFilePath: "/tmp/id",
+			},
+			wantErr: "multiple auth methods set",
 		},
 	}
 
@@ -97,7 +122,7 @@ func TestCredentialsSelectsMode(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			creds, err := tt.cfg.credentials()
+			creds, err := tt.cfg.credentials(context.Background())
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("expected error, got creds=%v", creds)
