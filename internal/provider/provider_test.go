@@ -28,6 +28,9 @@ func testProviderConfig() string {
 		cfg += "  use_local_profile = true\n"
 	}
 	cfg += "  alpn_conn_upgrade = \"" + alpn + "\"\n"
+	if v := os.Getenv("TC_INSECURE"); v == "true" || v == "1" {
+		cfg += "  insecure = true\n"
+	}
 	cfg += "}\n"
 	return cfg
 }

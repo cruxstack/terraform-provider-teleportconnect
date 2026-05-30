@@ -29,6 +29,15 @@ Initial public release.
 - `alpn_conn_upgrade` option to control HTTPS connection upgrade for proxies
   behind L7 load balancers.
 
+### Fixed
+
+- The `insecure` provider flag is now honored by the SSH tunnel's proxy
+  transport (it was previously only applied to the API client and DB tunnel), so
+  self-signed dev clusters work end-to-end.
+- The SSH tunnel now resolves a concrete cluster name for the proxy `DialHost`
+  transport when no leaf cluster is set, fixing a 403 against single-cluster
+  proxies.
+
 ### Security
 
 - User certificates use ECDSA P-256 keys (requires Teleport v15+).

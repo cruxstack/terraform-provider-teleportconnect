@@ -47,6 +47,10 @@ type SSHOptions struct {
 	// (*client.Client).Config().
 	TLSConfig *tls.Config
 
+	// Insecure skips verification of the proxy's TLS certificate, matching
+	// the provider's insecure flag. Only for self-signed dev clusters.
+	Insecure bool
+
 	// ALPNUpgrade selects the ALPN connection upgrade behavior, mirroring
 	// the DB tunnel's behavior. Required for L7-LB-fronted proxies.
 	ALPNUpgrade ALPNUpgradeMode
@@ -129,11 +133,18 @@ func NewSSHTunnel(parent context.Context, opts SSHOptions) (*SSHTunnel, error) {
 	upgradeRequired := opts.ALPNUpgrade == ALPNUpgradeYes
 
 	pc, err := tpproxy.NewClient(parent, tpproxy.ClientConfig{
-		ProxyAddress:            opts.ProxyAddress,
-		TLSRoutingEnabled:       true,
-		TLSConfigFunc:           func(_ string) (*tls.Config, error) { return opts.TLSConfig.Clone(), nil },
+		ProxyAddress:      opts.ProxyAddress,
+		TLSRoutingEnabled: true,
+		TLSConfigFunc: func(_ string) (*tls.Config, error) {
+			c := opts.TLSConfig.Clone()
+			if opts.Insecure {
+				c.InsecureSkipVerify = true
+			}
+			return c, nil
+		},
 		SSHConfig:               sshConfig,
 		ALPNConnUpgradeRequired: upgradeRequired,
+		InsecureSkipVerify:      opts.Insecure,
 		DialTimeout:             20 * time.Second,
 	})
 	if err != nil {

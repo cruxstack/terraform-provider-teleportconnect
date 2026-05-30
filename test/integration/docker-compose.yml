@@ -1,33 +1,51 @@
-# Single-node Teleport cluster for local acceptance/integration testing of
-# the teleportconnect provider. This boots auth+proxy+ssh in one container
-# with a self-signed cert (so the provider must run with insecure = true or
-# you must trust the generated CA).
+# Single-node Teleport cluster + a Postgres target for local
+# acceptance/integration testing of the teleportconnect provider.
 #
 # Usage:
 #   docker compose -f test/integration/docker-compose.yml up -d
-#   ./test/integration/bootstrap.sh   # creates a bot identity + sample db
+#   ./test/integration/bootstrap.sh   # creates a user + signs an identity
 #   make testacc                       # with TC_* env exported by run.sh
 #
-# Teleport version is pinned to a v15+ release because the provider issues
-# ECDSA P-256 user certificates.
+# The Teleport version is pinned to match the api module in go.mod
+# (v18.8.2 == git 2baa4e20). The provider issues ECDSA P-256 user certs,
+# which require Teleport v15+.
+#
+# NOTE: the distroless image's entrypoint already runs
+# `teleport start -c /etc/teleport/teleport.yaml`, so we must NOT set a
+# `command:` here or the args get duplicated.
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: teleportconnect-it-pg
+    environment:
+      POSTGRES_USER: dbuser
+      POSTGRES_PASSWORD: dbpass
+      POSTGRES_DB: appdb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dbuser -d appdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   teleport:
-    image: public.ecr.aws/gravitational/teleport-distroless:16
+    image: public.ecr.aws/gravitational/teleport-distroless:18
     container_name: teleportconnect-it
-    command: ["start", "-c", "/etc/teleport/teleport.yaml"]
     ports:
-      - "3080:3080" # web/proxy
-      - "3023:3023" # ssh proxy
+      - "3080:3080" # web/proxy (TLS routing)
       - "3025:3025" # auth
     volumes:
       - ./teleport.yaml:/etc/teleport/teleport.yaml:ro
       - teleport-data:/var/lib/teleport
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "teleport", "status"]
+      # `tctl status` exits 0 once the auth service is serving locally.
+      test: ["CMD", "/usr/local/bin/tctl", "status"]
       interval: 5s
       timeout: 5s
-      retries: 20
+      retries: 30
 
 volumes:
   teleport-data:

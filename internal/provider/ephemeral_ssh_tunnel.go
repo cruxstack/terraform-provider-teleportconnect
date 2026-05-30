@@ -141,7 +141,13 @@ func (e *ephemeralSSHTunnel) Open(ctx context.Context, req ephemeral.OpenRequest
 		}
 		ttl = d
 	}
-	cluster := stringOrDefault(data.Cluster.ValueString(), e.pd.Cluster)
+	// routeCluster is the cert RouteToCluster: empty means "home cluster".
+	routeCluster := stringOrDefault(data.Cluster.ValueString(), e.pd.Cluster)
+	// dialCluster is what the proxy transport's DialHost needs: a concrete
+	// cluster name. Fall back to the proxy's own cluster (resolved at
+	// configure time) when no override is set, since an empty cluster makes
+	// DialHost return 403.
+	dialCluster := stringOrDefault(routeCluster, e.pd.ClusterName)
 
 	tflog.Info(ctx, "issuing ssh certificate", map[string]any{
 		"gateway_node": gateway,
@@ -153,7 +159,7 @@ func (e *ephemeralSSHTunnel) Open(ctx context.Context, req ephemeral.OpenRequest
 		NodeName:       gateway,
 		SSHLogin:       sshLogin,
 		TTL:            ttl,
-		RouteToCluster: cluster,
+		RouteToCluster: routeCluster,
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to issue ssh credentials", err.Error())
@@ -162,7 +168,7 @@ func (e *ephemeralSSHTunnel) Open(ctx context.Context, req ephemeral.OpenRequest
 
 	t, err := tunnel.NewSSHTunnel(context.Background(), tunnel.SSHOptions{
 		ProxyAddress: e.pd.ProxyAddress,
-		Cluster:      cluster,
+		Cluster:      dialCluster,
 		GatewayNode:  gateway,
 		TargetHost:   targetHost,
 		TargetPort:   targetPort,
@@ -171,6 +177,7 @@ func (e *ephemeralSSHTunnel) Open(ctx context.Context, req ephemeral.OpenRequest
 		PrivateKey:   cred.PrivateKey,
 		SSHCAs:       cred.SSHCAs,
 		TLSConfig:    e.pd.Client.Config(),
+		Insecure:     e.pd.Insecure,
 		ALPNUpgrade:  tunnelUpgradeMode(e.pd.ALPNConnUpgrade),
 	})
 	if err != nil {

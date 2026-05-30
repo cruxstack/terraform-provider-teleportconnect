@@ -62,10 +62,21 @@ const (
 // local listeners keyed by an opaque ID so Close handlers can tear them
 // down deterministically.
 type ProviderData struct {
-	Client          *client.Client
-	ProxyAddress    string
-	Cluster         string
+	Client       *client.Client
+	ProxyAddress string
+	// Cluster is the user-supplied leaf-cluster override (may be empty,
+	// meaning "the cluster the proxy belongs to"). Used for cert
+	// RouteToCluster.
+	Cluster string
+	// ClusterName is the proxy's own cluster name resolved from Ping. The
+	// SSH tunnel transport requires a concrete cluster name for DialHost,
+	// so this is used as the fallback when no override is set.
+	ClusterName     string
 	ALPNConnUpgrade ALPNConnUpgradeMode
+
+	// Insecure mirrors the provider's insecure flag. Tunnels need it to skip
+	// proxy TLS verification when talking to a self-signed cluster.
+	Insecure bool
 
 	// Tunnels is shared across ephemeral resources to track listeners that
 	// must outlive a single Open call (the listener goroutine has to live
@@ -223,7 +234,9 @@ func (p *teleportconnectProvider) Configure(ctx context.Context, req provider.Co
 		Client:          clt,
 		ProxyAddress:    authCfg.ProxyAddress,
 		Cluster:         authCfg.Cluster,
+		ClusterName:     pi.ClusterName,
 		ALPNConnUpgrade: upgradeMode,
+		Insecure:        authCfg.Insecure,
 		Tunnels:         NewTunnelRegistry(),
 	}
 
