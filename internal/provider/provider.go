@@ -7,6 +7,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/gravitational/teleport/api/client"
@@ -75,15 +76,13 @@ type ProviderData struct {
 // providerModel mirrors the HCL schema. Optional fields use types.* so we can
 // distinguish unset from empty when validating mutually exclusive auth modes.
 type providerModel struct {
-	ProxyAddress       types.String `tfsdk:"proxy_address"`
-	Cluster            types.String `tfsdk:"cluster"`
-	IdentityFilePath   types.String `tfsdk:"identity_file_path"`
-	IdentityFileData   types.String `tfsdk:"identity_file_data"`
-	UseLocalProfile    types.Bool   `tfsdk:"use_local_profile"`
-	JoinMethod         types.String `tfsdk:"join_method"`
-	JoinToken          types.String `tfsdk:"join_token"`
-	InsecureSkipVerify types.Bool   `tfsdk:"insecure_skip_verify"`
-	ALPNConnUpgrade    types.String `tfsdk:"alpn_conn_upgrade"`
+	ProxyAddress     types.String `tfsdk:"proxy_address"`
+	Cluster          types.String `tfsdk:"cluster"`
+	IdentityFilePath types.String `tfsdk:"identity_file_path"`
+	IdentityFileData types.String `tfsdk:"identity_file_data"`
+	UseLocalProfile  types.Bool   `tfsdk:"use_local_profile"`
+	Insecure         types.Bool   `tfsdk:"insecure"`
+	ALPNConnUpgrade  types.String `tfsdk:"alpn_conn_upgrade"`
 }
 
 func (p *teleportconnectProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -118,17 +117,9 @@ func (p *teleportconnectProvider) Schema(_ context.Context, _ provider.SchemaReq
 				Optional:    true,
 				Description: "If true, reuse the local ~/.tsh profile for the configured proxy_address. Mirrors the developer's `tsh login` session.",
 			},
-			"join_method": schema.StringAttribute{
+			"insecure": schema.BoolAttribute{
 				Optional:    true,
-				Description: "Delegated Machine ID join method (e.g. iam, github, gcp, spacelift, kubernetes). Requires join_token.",
-			},
-			"join_token": schema.StringAttribute{
-				Optional:    true,
-				Description: "Bot join token name. Requires join_method.",
-			},
-			"insecure_skip_verify": schema.BoolAttribute{
-				Optional:    true,
-				Description: "Skip verification of the proxy TLS certificate. Should never be true in production.",
+				Description: "Skip verification of the proxy TLS certificate (equivalent to `tsh --insecure`). Should never be true in production.",
 			},
 			"alpn_conn_upgrade": schema.StringAttribute{
 				Optional:    true,
@@ -159,15 +150,37 @@ func (p *teleportconnectProvider) Configure(ctx context.Context, req provider.Co
 		return
 	}
 
+	// Validate the proxy_address format up front so users get a clear
+	// error instead of an opaque dial failure later.
+	proxyAddress := strings.TrimSpace(cfg.ProxyAddress.ValueString())
+	if _, _, err := net.SplitHostPort(proxyAddress); err != nil {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("proxy_address"),
+			"Invalid proxy_address",
+			fmt.Sprintf("proxy_address must be in host:port form (e.g. teleport.example.com:443): %v", err),
+		)
+		return
+	}
+
+	// Parse the ALPN upgrade mode before building the client so config
+	// errors are reported without opening a connection first.
+	upgradeMode, err := parseALPNUpgradeMode(cfg.ALPNConnUpgrade.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("alpn_conn_upgrade"),
+			"Invalid alpn_conn_upgrade value",
+			err.Error(),
+		)
+		return
+	}
+
 	authCfg := auth.Config{
-		ProxyAddress:       cfg.ProxyAddress.ValueString(),
-		Cluster:            cfg.Cluster.ValueString(),
-		IdentityFilePath:   cfg.IdentityFilePath.ValueString(),
-		IdentityFileData:   cfg.IdentityFileData.ValueString(),
-		UseLocalProfile:    cfg.UseLocalProfile.ValueBool(),
-		JoinMethod:         cfg.JoinMethod.ValueString(),
-		JoinToken:          cfg.JoinToken.ValueString(),
-		InsecureSkipVerify: cfg.InsecureSkipVerify.ValueBool(),
+		ProxyAddress:     proxyAddress,
+		Cluster:          cfg.Cluster.ValueString(),
+		IdentityFilePath: cfg.IdentityFilePath.ValueString(),
+		IdentityFileData: cfg.IdentityFileData.ValueString(),
+		UseLocalProfile:  cfg.UseLocalProfile.ValueBool(),
+		Insecure:         cfg.Insecure.ValueBool(),
 	}
 
 	if err := authCfg.Validate(); err != nil {
@@ -188,22 +201,23 @@ func (p *teleportconnectProvider) Configure(ctx context.Context, req provider.Co
 		return
 	}
 
-	upgradeMode := ALPNAuto
-	switch strings.ToLower(strings.TrimSpace(cfg.ALPNConnUpgrade.ValueString())) {
-	case "", "auto":
-		upgradeMode = ALPNAuto
-	case "yes", "true", "on", "required":
-		upgradeMode = ALPNYes
-	case "no", "false", "off", "never":
-		upgradeMode = ALPNNo
-	default:
-		resp.Diagnostics.AddAttributeError(
-			path.Root("alpn_conn_upgrade"),
-			"Invalid alpn_conn_upgrade value",
-			fmt.Sprintf("expected one of auto/yes/no, got %q", cfg.ALPNConnUpgrade.ValueString()),
+	// Sanity ping: confirm the connection is actually authenticated by
+	// fetching cluster info. Failures here surface bad credentials at
+	// configure time rather than during a later resource read. Close the
+	// client if the ping fails so we don't leak the connection.
+	pi, err := clt.Ping(ctx)
+	if err != nil {
+		_ = clt.Close()
+		resp.Diagnostics.AddError(
+			"Teleport ping failed",
+			fmt.Sprintf("client.Ping returned: %v", err),
 		)
 		return
 	}
+	tflog.Info(ctx, "teleport connection established", map[string]any{
+		"cluster_name":   pi.ClusterName,
+		"server_version": pi.ServerVersion,
+	})
 
 	pd := &ProviderData{
 		Client:          clt,
@@ -218,26 +232,25 @@ func (p *teleportconnectProvider) Configure(ctx context.Context, req provider.Co
 	resp.ResourceData = pd
 	resp.DataSourceData = pd
 	resp.EphemeralResourceData = pd
+}
 
-	// Sanity ping: confirm the connection is actually authenticated by
-	// fetching cluster info. Failures here surface bad credentials at
-	// configure time rather than during a later resource read.
-	if pi, err := clt.Ping(ctx); err != nil {
-		resp.Diagnostics.AddError(
-			"Teleport ping failed",
-			fmt.Sprintf("client.Ping returned: %v", err),
-		)
-		return
-	} else {
-		tflog.Info(ctx, "teleport connection established", map[string]any{
-			"cluster_name":   pi.ClusterName,
-			"server_version": pi.ServerVersion,
-		})
+// parseALPNUpgradeMode maps the user-facing alpn_conn_upgrade string to the
+// internal mode enum. Empty or "auto" => ALPNAuto.
+func parseALPNUpgradeMode(v string) (ALPNConnUpgradeMode, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "auto":
+		return ALPNAuto, nil
+	case "yes", "true", "on", "required":
+		return ALPNYes, nil
+	case "no", "false", "off", "never":
+		return ALPNNo, nil
+	default:
+		return ALPNAuto, fmt.Errorf("expected one of auto/yes/no, got %q", v)
 	}
 }
 
 func (p *teleportconnectProvider) Resources(_ context.Context) []func() resource.Resource {
-	return nil
+	return []func() resource.Resource{}
 }
 
 func (p *teleportconnectProvider) DataSources(_ context.Context) []func() datasource.DataSource {

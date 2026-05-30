@@ -11,8 +11,9 @@ package dbcerts
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -22,6 +23,7 @@ import (
 	"github.com/gravitational/teleport/api/client"
 	"github.com/gravitational/teleport/api/client/proto"
 	"github.com/gravitational/teleport/api/defaults"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 // Request describes a single database certificate issuance.
@@ -46,7 +48,7 @@ type Request struct {
 type Result struct {
 	// CertPEM is the PEM-encoded TLS client certificate.
 	CertPEM []byte
-	// KeyPEM is the PEM-encoded RSA private key (PKCS#1).
+	// KeyPEM is the PEM-encoded ECDSA P-256 private key (PKCS#8).
 	KeyPEM []byte
 	// CAPEM is the PEM-encoded cluster TLS CA bundle.
 	CAPEM []byte
@@ -84,7 +86,13 @@ func Issue(ctx context.Context, c *client.Client, req Request) (*Result, error) 
 		return nil, fmt.Errorf("fetching current user: %w", err)
 	}
 
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	tflog.Debug(ctx, "generating ecdsa keypair for database certificate", map[string]any{
+		"database": req.Database,
+		"protocol": protocol,
+		"user":     tpUser.GetName(),
+	})
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generating private key: %w", err)
 	}
@@ -92,7 +100,7 @@ func Issue(ctx context.Context, c *client.Client, req Request) (*Result, error) 
 	if err != nil {
 		return nil, fmt.Errorf("marshaling public key: %w", err)
 	}
-	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PUBLIC KEY", Bytes: pubDER})
+	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})
 
 	certs, err := c.GenerateUserCerts(ctx, proto.UserCertsRequest{
 		Username:       tpUser.GetName(),
@@ -111,9 +119,13 @@ func Issue(ctx context.Context, c *client.Client, req Request) (*Result, error) 
 		return nil, fmt.Errorf("issuing database certificate: %w", err)
 	}
 
+	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling private key: %w", err)
+	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(priv),
+		Type:  "PRIVATE KEY",
+		Bytes: keyDER,
 	})
 
 	caResp, err := c.GetClusterCACert(ctx)

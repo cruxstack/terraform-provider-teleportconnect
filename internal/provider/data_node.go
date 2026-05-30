@@ -10,6 +10,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	dsschema "github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	tftypes "github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 // Compile-time interface assertions.
@@ -119,6 +120,11 @@ func (d *dataNode) Read(ctx context.Context, req datasource.ReadRequest, resp *d
 			"At least one of `hostname` or `labels` must be set.")
 		return
 	}
+
+	tflog.Debug(ctx, "looking up teleport node", map[string]any{
+		"hostname": wantHostname,
+		"labels":   wantLabels,
+	})
 
 	servers, err := d.pd.Client.GetNodes(ctx, defaults.Namespace)
 	if err != nil {

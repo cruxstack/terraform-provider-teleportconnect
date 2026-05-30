@@ -1,0 +1,29 @@
+# Minimal single-node Teleport config for local integration testing.
+# NOT for production use: it uses a self-signed cert and a static token.
+version: v3
+teleport:
+  nodename: teleportconnect-it
+  data_dir: /var/lib/teleport
+  log:
+    output: stderr
+    severity: INFO
+
+auth_service:
+  enabled: "yes"
+  listen_addr: 0.0.0.0:3025
+  cluster_name: teleportconnect.local
+  # Static join token used by bootstrap.sh to register the local db/ssh
+  # services. Local-only; never reuse outside this test harness.
+  tokens:
+    - "proxy,node,db:teleportconnect-it-token"
+
+ssh_service:
+  enabled: "yes"
+  labels:
+    role: bastion
+    env: it
+
+proxy_service:
+  enabled: "yes"
+  web_listen_addr: 0.0.0.0:3080
+  # Self-signed; the provider must use insecure = true against this cluster.

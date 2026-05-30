@@ -160,14 +160,6 @@ func (e *ephemeralSSHTunnel) Open(ctx context.Context, req ephemeral.OpenRequest
 		return
 	}
 
-	upgradeMode := tunnel.ALPNUpgradeAuto
-	switch e.pd.ALPNConnUpgrade {
-	case ALPNYes:
-		upgradeMode = tunnel.ALPNUpgradeYes
-	case ALPNNo:
-		upgradeMode = tunnel.ALPNUpgradeNo
-	}
-
 	t, err := tunnel.NewSSHTunnel(context.Background(), tunnel.SSHOptions{
 		ProxyAddress: e.pd.ProxyAddress,
 		Cluster:      cluster,
@@ -179,7 +171,7 @@ func (e *ephemeralSSHTunnel) Open(ctx context.Context, req ephemeral.OpenRequest
 		PrivateKey:   cred.PrivateKey,
 		SSHCAs:       cred.SSHCAs,
 		TLSConfig:    e.pd.Client.Config(),
-		ALPNUpgrade:  upgradeMode,
+		ALPNUpgrade:  tunnelUpgradeMode(e.pd.ALPNConnUpgrade),
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to start SSH tunnel", err.Error())

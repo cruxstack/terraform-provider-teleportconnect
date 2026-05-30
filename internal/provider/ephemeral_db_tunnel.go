@@ -181,20 +181,13 @@ func (e *ephemeralDBTunnel) Open(ctx context.Context, req ephemeral.OpenRequest,
 	// We use context.Background as the tunnel's parent because the tunnel
 	// must outlive the Open RPC. The provider's Close handler (or
 	// CloseAll on shutdown) is what tears it down.
-	upgradeMode := tunnel.ALPNUpgradeAuto
-	switch e.pd.ALPNConnUpgrade {
-	case ALPNYes:
-		upgradeMode = tunnel.ALPNUpgradeYes
-	case ALPNNo:
-		upgradeMode = tunnel.ALPNUpgradeNo
-	}
 	t, err := tunnel.NewDBTunnel(context.Background(), tunnel.DBOptions{
 		ProxyAddress:  e.pd.ProxyAddress,
 		Protocol:      cred.Protocol,
 		ClientCertPEM: cred.CertPEM,
 		ClientKeyPEM:  cred.KeyPEM,
 		CAPEM:         cred.CAPEM,
-		ALPNUpgrade:   upgradeMode,
+		ALPNUpgrade:   tunnelUpgradeMode(e.pd.ALPNConnUpgrade),
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to start local tunnel", err.Error())

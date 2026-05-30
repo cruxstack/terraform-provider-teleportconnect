@@ -10,6 +10,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	dsschema "github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	tftypes "github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 // Compile-time interface assertions.
@@ -126,6 +127,11 @@ func (d *dataDatabase) Read(ctx context.Context, req datasource.ReadRequest, res
 	// roles allow reading db_server but not db, and tsh db ls uses the
 	// same path. Multiple servers may advertise the same Database; we
 	// dedupe by name.
+	tflog.Debug(ctx, "looking up teleport database", map[string]any{
+		"name":   wantName,
+		"labels": wantLabels,
+	})
+
 	servers, err := d.pd.Client.GetDatabaseServers(ctx, defaults.Namespace)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to list database servers", err.Error())
@@ -181,15 +187,4 @@ func (d *dataDatabase) Read(ctx context.Context, req datasource.ReadRequest, res
 	data.AllLabels = allLabels
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-}
-
-// labelsMatch returns true if every key/value in `want` is present in `have`
-// with the same value. An empty want returns true.
-func labelsMatch(have, want map[string]string) bool {
-	for k, v := range want {
-		if hv, ok := have[k]; !ok || hv != v {
-			return false
-		}
-	}
-	return true
 }

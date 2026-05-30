@@ -3,11 +3,8 @@ package provider
 import (
 	"context"
 	"fmt"
-	"net"
-	"strconv"
 	"time"
 
-	"github.com/gravitational/teleport/api/defaults"
 	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
 	ephschema "github.com/hashicorp/terraform-plugin-framework/ephemeral/schema"
 	tftypes "github.com/hashicorp/terraform-plugin-framework/types"
@@ -177,14 +174,10 @@ func (e *ephemeralDBCredentials) Open(ctx context.Context, req ephemeral.OpenReq
 		return
 	}
 
-	host, portStr, err := splitHostPort(e.pd.ProxyAddress)
+	host, port, err := proxyHostPort(e.pd.ProxyAddress)
 	if err != nil {
 		resp.Diagnostics.AddError("Invalid proxy_address", err.Error())
 		return
-	}
-	port, _ := strconv.Atoi(portStr)
-	if port == 0 {
-		port = defaults.StandardHTTPSPort
 	}
 
 	data.Host = tftypes.StringValue(host)
@@ -194,20 +187,4 @@ func (e *ephemeralDBCredentials) Open(ctx context.Context, req ephemeral.OpenReq
 	data.Key = tftypes.StringValue(string(res.KeyPEM))
 
 	resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
-}
-
-func stringOrDefault(v, def string) string {
-	if v != "" {
-		return v
-	}
-	return def
-}
-
-// splitHostPort tolerates inputs missing a port (defaulting to 443 later).
-func splitHostPort(addr string) (host, port string, err error) {
-	host, port, err = net.SplitHostPort(addr)
-	if err != nil {
-		return addr, "", nil
-	}
-	return host, port, nil
 }

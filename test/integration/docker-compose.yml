@@ -1,0 +1,33 @@
+# Single-node Teleport cluster for local acceptance/integration testing of
+# the teleportconnect provider. This boots auth+proxy+ssh in one container
+# with a self-signed cert (so the provider must run with insecure = true or
+# you must trust the generated CA).
+#
+# Usage:
+#   docker compose -f test/integration/docker-compose.yml up -d
+#   ./test/integration/bootstrap.sh   # creates a bot identity + sample db
+#   make testacc                       # with TC_* env exported by run.sh
+#
+# Teleport version is pinned to a v15+ release because the provider issues
+# ECDSA P-256 user certificates.
+
+services:
+  teleport:
+    image: public.ecr.aws/gravitational/teleport-distroless:16
+    container_name: teleportconnect-it
+    command: ["start", "-c", "/etc/teleport/teleport.yaml"]
+    ports:
+      - "3080:3080" # web/proxy
+      - "3023:3023" # ssh proxy
+      - "3025:3025" # auth
+    volumes:
+      - ./teleport.yaml:/etc/teleport/teleport.yaml:ro
+      - teleport-data:/var/lib/teleport
+    healthcheck:
+      test: ["CMD", "teleport", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  teleport-data:

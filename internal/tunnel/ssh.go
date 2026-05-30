@@ -2,18 +2,18 @@ package tunnel
 
 import (
 	"context"
-	"crypto/rsa"
+	"crypto"
 	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"strconv"
 	"sync"
 	"time"
 
 	tpproxy "github.com/gravitational/teleport/api/client/proxy"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -39,7 +39,7 @@ type SSHOptions struct {
 	// presented as the SSH client identity; the SSH CAs are used for the
 	// HostKeyCallback so we trust Teleport-issued host keys.
 	SSHCert    *ssh.Certificate
-	PrivateKey *rsa.PrivateKey
+	PrivateKey crypto.Signer
 	SSHCAs     [][]byte
 
 	// TLSConfig is the mTLS config used to talk to the proxy's gRPC
@@ -61,11 +61,8 @@ type SSHOptions struct {
 // host:port. This is the in-process equivalent of `tsh ssh -N -L
 // LOCAL:TARGET GATEWAY`.
 //
-// NOTE: this implementation is build-verified but has not been smoke-tested
-// against a live cluster yet. The DB tunnel followed the same shape and
-// works end-to-end; the same primitives are reused here, but the proxy.SSH
-// → ssh.NewClientConn → direct-tcpip path has more moving pieces (host key
-// verification, login matching, etc.) that may need real-world tuning.
+// Lifecycle: Close stops the listener, force-closes in-flight connections,
+// and tears down the SSH session and proxy client.
 type SSHTunnel struct {
 	listener    net.Listener
 	proxyClient *tpproxy.Client
@@ -77,6 +74,8 @@ type SSHTunnel struct {
 
 	mu     sync.Mutex
 	closed bool
+	conns  map[net.Conn]struct{}
+	wg     sync.WaitGroup
 }
 
 // NewSSHTunnel issues nothing on its own (callers pass an already-issued
@@ -113,7 +112,7 @@ func NewSSHTunnel(parent context.Context, opts SSHOptions) (*SSHTunnel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("building ssh cert signer: %w", err)
 	}
-	hostKeyCallback, err := makeHostKeyCallback(opts.SSHCAs)
+	hostKeyCallback, err := makeHostKeyCallback(parent, opts.SSHCAs)
 	if err != nil {
 		return nil, fmt.Errorf("building host key callback: %w", err)
 	}
@@ -124,21 +123,10 @@ func NewSSHTunnel(parent context.Context, opts SSHOptions) (*SSHTunnel, error) {
 		Timeout:         15 * time.Second,
 	}
 
-	// Pick ALPN upgrade behavior. For tpproxy.NewClient there's no
-	// auto-detect helper, so we do the same probe as the DB tunnel when
-	// in auto mode.
-	upgradeRequired := false
-	switch opts.ALPNUpgrade {
-	case ALPNUpgradeYes:
-		upgradeRequired = true
-	case ALPNUpgradeNo:
-		upgradeRequired = false
-	default:
-		// Auto: leave as false. Callers who know their proxy is behind
-		// an L7 LB should pass ALPNUpgradeYes explicitly (same caveat
-		// as the DB tunnel; tpclient.IsALPNConnUpgradeRequired is
-		// unreliable for many real-world LBs).
-	}
+	// Pick ALPN upgrade behavior. tpproxy.NewClient has no auto-detect
+	// helper, so auto mode leaves the upgrade off; callers who know their
+	// proxy is behind an L7 LB should pass ALPNUpgradeYes explicitly.
+	upgradeRequired := opts.ALPNUpgrade == ALPNUpgradeYes
 
 	pc, err := tpproxy.NewClient(parent, tpproxy.ClientConfig{
 		ProxyAddress:            opts.ProxyAddress,
@@ -189,9 +177,15 @@ func NewSSHTunnel(parent context.Context, opts SSHOptions) (*SSHTunnel, error) {
 		target:      net.JoinHostPort(opts.TargetHost, strconv.Itoa(opts.TargetPort)),
 		ctx:         ctx,
 		cancel:      cancel,
+		conns:       make(map[net.Conn]struct{}),
 	}
-	log.Printf("teleportconnect ssh-tunnel: listening on %s -> %s via gateway %s (alpn_upgrade=%v)",
-		ln.Addr(), t.target, opts.GatewayNode, upgradeRequired)
+	tflog.Debug(ctx, "ssh tunnel listening", map[string]any{
+		"local_addr":   ln.Addr().String(),
+		"target":       t.target,
+		"gateway_node": opts.GatewayNode,
+		"alpn_upgrade": upgradeRequired,
+	})
+	t.wg.Add(1)
 	go t.acceptLoop()
 	return t, nil
 }
@@ -211,12 +205,13 @@ func (t *SSHTunnel) LocalPort() int {
 	return 0
 }
 
-// Close stops accepting new connections and tears down the SSH session
-// and proxy client. Safe to call multiple times.
+// Close stops accepting new connections, force-closes in-flight
+// connections, and tears down the SSH session and proxy client. Safe to
+// call multiple times.
 func (t *SSHTunnel) Close() error {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if t.closed {
+		t.mu.Unlock()
 		return nil
 	}
 	t.closed = true
@@ -225,6 +220,13 @@ func (t *SSHTunnel) Close() error {
 	if err := t.listener.Close(); err != nil && firstErr == nil {
 		firstErr = err
 	}
+	for c := range t.conns {
+		_ = c.Close()
+	}
+	t.mu.Unlock()
+
+	t.wg.Wait()
+
 	if err := t.sshClient.Close(); err != nil && firstErr == nil {
 		firstErr = err
 	}
@@ -234,24 +236,52 @@ func (t *SSHTunnel) Close() error {
 	return firstErr
 }
 
+func (t *SSHTunnel) trackConn(c net.Conn) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return false
+	}
+	t.conns[c] = struct{}{}
+	return true
+}
+
+func (t *SSHTunnel) untrackConn(c net.Conn) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.conns, c)
+}
+
 func (t *SSHTunnel) acceptLoop() {
+	defer t.wg.Done()
 	for {
 		client, err := t.listener.Accept()
 		if err != nil {
 			return
 		}
+		if !t.trackConn(client) {
+			_ = client.Close()
+			return
+		}
+		t.wg.Add(1)
 		go t.handleConn(client)
 	}
 }
 
 func (t *SSHTunnel) handleConn(client net.Conn) {
-	defer client.Close()
+	defer t.wg.Done()
+	defer t.untrackConn(client)
+	defer func() { _ = client.Close() }()
+
 	upstream, err := t.sshClient.DialContext(t.ctx, "tcp", t.target)
 	if err != nil {
-		log.Printf("teleportconnect ssh-tunnel: dial %s failed: %v", t.target, err)
+		tflog.Error(t.ctx, "ssh tunnel dial to target failed", map[string]any{
+			"target": t.target,
+			"error":  err.Error(),
+		})
 		return
 	}
-	defer upstream.Close()
+	defer func() { _ = upstream.Close() }()
 
 	done := make(chan struct{}, 2)
 	go func() {
@@ -269,15 +299,19 @@ func (t *SSHTunnel) handleConn(client net.Conn) {
 
 // makeHostKeyCallback builds an ssh.HostKeyCallback that accepts host keys
 // signed by any of the supplied SSH CAs (in authorized_keys format).
-func makeHostKeyCallback(sshCAs [][]byte) (ssh.HostKeyCallback, error) {
+// Entries that fail to parse are skipped (with a debug log) rather than
+// aborting the whole set, so a single malformed CA line does not discard
+// valid ones.
+func makeHostKeyCallback(ctx context.Context, sshCAs [][]byte) (ssh.HostKeyCallback, error) {
 	cas := make([]ssh.PublicKey, 0, len(sshCAs))
 	for _, raw := range sshCAs {
 		// Each entry may contain multiple authorized_keys lines.
 		for len(raw) > 0 {
 			pk, _, _, rest, err := ssh.ParseAuthorizedKey(raw)
 			if err != nil {
-				// Stop on the first parse failure for this entry; ignore
-				// trailing whitespace etc.
+				tflog.Debug(ctx, "skipping unparseable ssh CA entry", map[string]any{
+					"error": err.Error(),
+				})
 				break
 			}
 			cas = append(cas, pk)

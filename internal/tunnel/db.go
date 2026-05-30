@@ -10,19 +10,22 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"strings"
 	"sync"
 	"time"
 
 	tpclient "github.com/gravitational/teleport/api/client"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 // ALPN wire protocol values for Teleport database access. Values mirror
 // what `tsh proxy db --tunnel` and the Teleport proxy expect; they're
 // part of the public protocol contract even though they live in the GPL
 // portion of the Teleport tree (lib/srv/alpnproxy/common/protocols.go).
+// They are hardcoded here so this provider does not need to link the GPL/
+// AGPL portions of the Teleport source. If upstream renames an ALPN value
+// in a future release, the tunnel for that protocol must be updated here.
 const (
 	alpnPostgres      = "teleport-postgres"
 	alpnMySQL         = "teleport-mysql"
@@ -103,8 +106,8 @@ type DBOptions struct {
 // accepted connection to a Teleport proxy via TLS routing.
 //
 // Lifecycle: NewDBTunnel starts accepting immediately. Close stops the
-// listener and waits briefly for in-flight handlers; tunnels still in the
-// middle of a connection get cancelled when the provider process exits.
+// listener, cancels the context, and force-closes all in-flight
+// connections so nothing leaks past terraform apply.
 type DBTunnel struct {
 	listener   net.Listener
 	alpnDialer tpclient.ContextDialer
@@ -115,6 +118,8 @@ type DBTunnel struct {
 
 	mu     sync.Mutex
 	closed bool
+	conns  map[net.Conn]struct{}
+	wg     sync.WaitGroup
 }
 
 // NewDBTunnel builds the TLS config from the supplied PEM material, opens
@@ -196,9 +201,15 @@ func NewDBTunnel(parent context.Context, opts DBOptions) (*DBTunnel, error) {
 		proxyAddr:  opts.ProxyAddress,
 		ctx:        ctx,
 		cancel:     cancel,
+		conns:      make(map[net.Conn]struct{}),
 	}
-	log.Printf("teleportconnect tunnel: listening on %s -> %s (alpn=%s, alpn_upgrade=%v)",
-		ln.Addr(), opts.ProxyAddress, alpn, upgradeRequired)
+	tflog.Debug(ctx, "database tunnel listening", map[string]any{
+		"local_addr":   ln.Addr().String(),
+		"proxy_addr":   opts.ProxyAddress,
+		"alpn":         alpn,
+		"alpn_upgrade": upgradeRequired,
+	})
+	t.wg.Add(1)
 	go t.acceptLoop()
 	return t, nil
 }
@@ -220,20 +231,46 @@ func (t *DBTunnel) LocalPort() int {
 	return 0
 }
 
-// Close stops accepting new connections and cancels the background context.
-// Safe to call multiple times.
+// Close stops accepting new connections, cancels the background context,
+// and force-closes any in-flight connections. Safe to call multiple times.
 func (t *DBTunnel) Close() error {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if t.closed {
+		t.mu.Unlock()
 		return nil
 	}
 	t.closed = true
 	t.cancel()
-	return t.listener.Close()
+	err := t.listener.Close()
+	for c := range t.conns {
+		_ = c.Close()
+	}
+	t.mu.Unlock()
+
+	t.wg.Wait()
+	return err
+}
+
+// trackConn records an active client connection. Returns false if the
+// tunnel is already closed, in which case the caller should not proceed.
+func (t *DBTunnel) trackConn(c net.Conn) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return false
+	}
+	t.conns[c] = struct{}{}
+	return true
+}
+
+func (t *DBTunnel) untrackConn(c net.Conn) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.conns, c)
 }
 
 func (t *DBTunnel) acceptLoop() {
+	defer t.wg.Done()
 	for {
 		client, err := t.listener.Accept()
 		if err != nil {
@@ -241,25 +278,36 @@ func (t *DBTunnel) acceptLoop() {
 			// Either way we exit; new connections won't be served.
 			return
 		}
+		if !t.trackConn(client) {
+			_ = client.Close()
+			return
+		}
+		t.wg.Add(1)
 		go t.handleConn(client)
 	}
 }
 
 func (t *DBTunnel) handleConn(client net.Conn) {
-	defer client.Close()
+	defer t.wg.Done()
+	defer t.untrackConn(client)
+	defer func() { _ = client.Close() }()
 
 	// Per-connection upstream dial through the ALPN dialer. The dialer
 	// internally handles HTTPS upgrade for L7-LB-fronted proxies and
 	// performs the TLS-routing handshake with our client cert.
 	upstream, err := t.alpnDialer.DialContext(t.ctx, "tcp", t.proxyAddr)
 	if err != nil {
-		// Provider stderr is plumbed to Terraform's debug logs.
-		log.Printf("teleportconnect tunnel: upstream dial to %s failed: %v", t.proxyAddr, err)
+		tflog.Error(t.ctx, "database tunnel upstream dial failed", map[string]any{
+			"proxy_addr": t.proxyAddr,
+			"error":      err.Error(),
+		})
 		return
 	}
-	defer upstream.Close()
+	defer func() { _ = upstream.Close() }()
 	if tlsConn, ok := upstream.(*tls.Conn); ok {
-		log.Printf("teleportconnect tunnel: upstream connected, alpn=%q", tlsConn.ConnectionState().NegotiatedProtocol)
+		tflog.Trace(t.ctx, "database tunnel upstream connected", map[string]any{
+			"negotiated_alpn": tlsConn.ConnectionState().NegotiatedProtocol,
+		})
 	}
 
 	// Pipe in both directions concurrently. When either side closes,

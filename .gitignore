@@ -1,0 +1,29 @@
+# Compiled provider binaries
+terraform-provider-teleportconnect
+terraform-provider-teleportconnect_*
+/build/
+/dist/
+
+# Go build/test artifacts
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# Terraform working files
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+.terraform.lock.hcl
+
+# Local CLI config used for dev_overrides
+.terraformrc
+terraform.rc
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store

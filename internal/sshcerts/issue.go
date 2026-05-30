@@ -7,8 +7,10 @@ package sshcerts
 
 import (
 	"context"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"errors"
 	"fmt"
 	"time"
@@ -16,6 +18,7 @@ import (
 	"github.com/gravitational/teleport/api/client"
 	"github.com/gravitational/teleport/api/client/proto"
 	"github.com/gravitational/teleport/api/constants"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -38,8 +41,9 @@ type Request struct {
 type Result struct {
 	// SSHCert is the parsed Teleport-signed SSH certificate.
 	SSHCert *ssh.Certificate
-	// PrivateKey is the RSA private key matching the cert. Caller owns it.
-	PrivateKey *rsa.PrivateKey
+	// PrivateKey is the ECDSA P-256 private key matching the cert,
+	// exposed as a crypto.Signer. Caller owns it.
+	PrivateKey crypto.Signer
 	// SSHCAs are the PEM-encoded SSH CA public keys (in OpenSSH
 	// authorized_keys format) for verifying SSH host keys of cluster nodes.
 	SSHCAs [][]byte
@@ -69,7 +73,13 @@ func Issue(ctx context.Context, c *client.Client, req Request) (*Result, error) 
 		return nil, fmt.Errorf("fetching current user: %w", err)
 	}
 
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	tflog.Debug(ctx, "generating ecdsa keypair for ssh certificate", map[string]any{
+		"node_name": req.NodeName,
+		"ssh_login": req.SSHLogin,
+		"user":      tpUser.GetName(),
+	})
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generating private key: %w", err)
 	}
