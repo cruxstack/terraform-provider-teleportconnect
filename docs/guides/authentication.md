@@ -67,12 +67,34 @@ provider "teleportconnect" {
 }
 ```
 
-## Delegated join methods
+## Delegated join methods (CI, no tbot)
 
-Native delegated Machine ID join methods (`iam`, `github`, `gcp`,
-`spacelift`, `kubernetes`, ...) are **not yet implemented** in this provider.
-Until they are, run `tbot` with the appropriate join method as a sidecar and
-point `identity_file_path` at the identity it writes.
+For CI runners, set `join_method` + `join_token` on the provider. The provider
+fetches the platform's OIDC/JWT identity token and joins the cluster
+in-process, with no identity file and no `tbot` sidecar:
+
+```hcl
+provider "teleportconnect" {
+  proxy_address = "teleport.example.com:443"
+  join_method   = "github" # github | gitlab | kubernetes | spacelift
+  join_token    = "teleportconnect-ci"
+
+  # join_audience defaults to the proxy host; override only if your join
+  # token expects a different audience claim.
+  # join_audience = "teleport.example.com"
+}
+```
+
+Supported methods: `github`, `gitlab`, `kubernetes`, `spacelift`. Each fetches
+the identity token from the platform's standard location (GitHub's OIDC
+request endpoint, a GitLab `id_tokens` variable, the pod service-account
+token, or `$SPACELIFT_OIDC_TOKEN`). See the
+[join methods guide](./join-methods.md) for per-platform setup, audience
+configuration, and the matching Teleport join-token resources.
+
+Other delegated methods (`iam`, `gcp`, `azure`, `circleci`, ...) are not yet
+implemented; for those, run `tbot` as a sidecar and point
+`identity_file_path` at the identity it writes.
 
 ## Insecure mode
 

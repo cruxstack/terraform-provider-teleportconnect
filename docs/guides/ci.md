@@ -91,7 +91,7 @@ the CI runner.
 
 ## Authentication recipes
 
-Both recipes set `identity_file_path` on the provider. Pick one.
+Pick one. Recipe B (native delegated join) is the simplest for CI.
 
 ### Recipe A — identity file from a GitHub Actions secret
 
@@ -111,20 +111,27 @@ tctl auth sign --user terraform-ci --ttl 24h --format file --out ./identity
 - **Cons**: the identity has a fixed TTL and must be re-signed and the secret
   updated before it expires (see [rotation](#identity-file-rotation)).
 
-### Recipe B — tbot as a workflow pre-step
+### Recipe B — native delegated join (recommended)
 
-Download the single `tbot` binary at runtime and use a GitHub join token (GitHub
-OIDC) to write a fresh identity each run. Nothing is installed system-wide and
-there is no long-lived secret to rotate.
+Set `join_method` + `join_token` on the provider. It fetches the GitHub OIDC
+token in-process and joins the cluster directly — no binary to download, no
+identity file, no secret to rotate.
 
-This requires a one-time bot + `github` join token configured on the cluster
-(see the Teleport Machine ID docs). The workflow step downloads `tbot`, runs it
-once, and points the provider at the identity it writes.
+```hcl
+provider "teleportconnect" {
+  proxy_address = "teleport.example.com:443"
+  join_method   = "github"
+  join_token    = "teleportconnect-ci"
+}
+```
 
-- **Pros**: fresh, short-lived identity each run; no static secret to rotate;
-  aligns with the delegated-join roadmap.
-- **Cons**: downloads a `tbot` binary each run (cache it with `actions/cache` if
-  you want); requires a join token configured on the cluster.
+This requires a one-time `github` join token on the cluster (see the
+[join methods guide](./join-methods.md) for the token resource and the other
+supported platforms: gitlab, kubernetes, spacelift).
+
+- **Pros**: fresh, short-lived credentials each run; no static secret to
+  rotate; nothing written to disk; smallest workflow.
+- **Cons**: requires a join token configured on the cluster.
 
 ## Sample Terraform configuration
 
@@ -235,7 +242,11 @@ jobs:
         run: rm -f "${RUNNER_TEMP}/teleport-identity"
 ```
 
-### Recipe B workflow (tbot pre-step)
+### Recipe B workflow (native delegated join)
+
+No tbot download, no identity file, no cleanup step. The provider config sets
+`join_method = "github"` + `join_token`; the workflow just needs the
+`id-token: write` permission.
 
 ```yaml
 name: terraform
@@ -245,7 +256,7 @@ on:
     branches: [main]
 
 permissions:
-  id-token: write # required for the GitHub join method
+  id-token: write # lets the provider fetch the GitHub OIDC token
   contents: read
 
 jobs:
@@ -258,39 +269,11 @@ jobs:
         with:
           terraform_version: "1.12.2"
 
-      - name: Install tbot
-        run: |
-          umask 077
-          ver="16.4.0" # pin to your cluster's major version
-          curl -fsSL "https://cdn.teleport.dev/teleport-v${ver}-linux-amd64-bin.tar.gz" \
-            | tar -xz -C "${RUNNER_TEMP}" teleport/tbot
-          echo "${RUNNER_TEMP}/teleport" >> "$GITHUB_PATH"
-
-      - name: Write Teleport identity with tbot
-        id: identity
-        run: |
-          umask 077
-          path="${RUNNER_TEMP}/teleport-identity"
-          tbot start \
-            --oneshot \
-            --destination-dir "${RUNNER_TEMP}/tbot" \
-            --join-method github \
-            --token terraform-ci-github \
-            --proxy-server teleport.example.com:443
-          cp "${RUNNER_TEMP}/tbot/identity" "$path"
-          echo "path=$path" >> "$GITHUB_OUTPUT"
-
       - name: Terraform init
         run: terraform init
 
       - name: Terraform apply
         run: terraform apply -auto-approve
-        env:
-          TF_VAR_identity_file_path: ${{ steps.identity.outputs.path }}
-
-      - name: Clean up identity
-        if: always()
-        run: rm -rf "${RUNNER_TEMP}/teleport-identity" "${RUNNER_TEMP}/tbot"
 ```
 
 ## ALPN connection upgrade

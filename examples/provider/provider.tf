@@ -25,3 +25,13 @@ provider "teleportconnect" {
 #   # that terminates TLS with its own certificate.
 #   alpn_conn_upgrade = "auto"
 # }
+
+# In CI, use a delegated join — the provider fetches the platform's OIDC token
+# and joins in-process, with no identity file or tbot sidecar. Supported
+# methods: github, gitlab, kubernetes, spacelift.
+#
+# provider "teleportconnect" {
+#   proxy_address = "teleport.example.com:443"
+#   join_method   = "github"
+#   join_token    = "teleportconnect-ci"
+# }

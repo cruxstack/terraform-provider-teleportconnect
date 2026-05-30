@@ -10,6 +10,11 @@ and this project adheres to
 
 ### Added
 
+- Delegated Machine ID join auth mode: set `join_method` + `join_token` (and
+  optional `join_audience`) on the provider to join the cluster in-process from
+  CI, with no identity file and no `tbot` sidecar. Supported methods: `github`,
+  `gitlab`, `kubernetes`, `spacelift`. Implemented against the Apache-2.0 `api/`
+  module only.
 - `data.teleportconnect_cluster` — exposes the cluster name, server version, and
   the cluster TLS CA bundle (`ca_certificate`). The CA is cluster-scoped, so it
   can be written to a single file and reused as `sslrootcert` across many

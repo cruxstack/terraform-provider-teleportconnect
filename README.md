@@ -52,16 +52,31 @@ provider "teleportconnect" {
 
 Exactly one authentication method must be configured:
 
-| Attribute            | Description                                                                 |
-| -------------------- | --------------------------------------------------------------------------- |
-| `use_local_profile`  | Reuse the local `~/.tsh` profile for `proxy_address` (mirrors `tsh login`). |
-| `identity_file_path` | Path to an identity file produced by `tctl auth sign` or `tbot`.            |
-| `identity_file_data` | Inline identity file contents (PEM bundle). Marked sensitive.               |
+| Attribute                    | Description                                                                                     |
+| ---------------------------- | ----------------------------------------------------------------------------------------------- |
+| `use_local_profile`          | Reuse the local `~/.tsh` profile for `proxy_address` (mirrors `tsh login`).                     |
+| `identity_file_path`         | Path to an identity file produced by `tctl auth sign` or `tbot`.                                |
+| `identity_file_data`         | Inline identity file contents (PEM bundle). Marked sensitive.                                   |
+| `join_method` + `join_token` | Delegated Machine ID join for CI — the provider joins the cluster in-process, no `tbot` needed. |
 
-For non-interactive runners (CI, Spacelift, etc.), run `tbot` as a sidecar that
-writes an identity file and point `identity_file_path` at it. Delegated Machine
-ID join methods (`iam`, `github`, ...) are not yet implemented in this provider;
-see the roadmap below.
+### CI / Machine ID join (no tbot, no identity file)
+
+For non-interactive runners, set `join_method` + `join_token`. The provider
+fetches the platform's OIDC/JWT identity token and joins the cluster in-process
+— no `tbot` sidecar and no identity file to manage:
+
+```hcl
+provider "teleportconnect" {
+  proxy_address = "teleport.example.com:443"
+  join_method   = "github" # github | gitlab | kubernetes | spacelift
+  join_token    = "teleportconnect-ci"
+}
+```
+
+Supported methods: `github`, `gitlab`, `kubernetes`, `spacelift`. For GitHub
+Actions, the only extra requirement is `permissions: id-token: write` on the
+job. See the [CI usage guide](./docs/guides/ci.md) and the
+[join methods guide](./docs/guides/join-methods.md) for per-platform setup.
 
 ### Example: issue a database certificate
 
