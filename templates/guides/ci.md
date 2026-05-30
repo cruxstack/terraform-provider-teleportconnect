@@ -12,8 +12,8 @@ behind a Teleport-protected database with the upstream
 provider.
 
 The goal is **no prerequisites on the runner** beyond Terraform itself: no
-`tsh`, no `tbot` system install, no `psql`. The `teleportconnect` provider
-does the Teleport authentication and TLS routing in-process.
+`tsh`, no `tbot` system install, no `psql`. The `teleportconnect` provider does
+the Teleport authentication and TLS routing in-process.
 
 ## Recommended pattern: db_tunnel + sslmode=disable
 
@@ -28,24 +28,48 @@ ephemeral "teleportconnect_db_tunnel" "main" {
 }
 
 provider "postgresql" {
-  host     = ephemeral.teleportconnect_db_tunnel.main.local_host
-  port     = ephemeral.teleportconnect_db_tunnel.main.local_port
-  database = "appdb"
-  username = "ci"
-  sslmode  = "disable" # the tunnel terminates TLS to Teleport for you
+  host      = ephemeral.teleportconnect_db_tunnel.main.local_host
+  port      = ephemeral.teleportconnect_db_tunnel.main.local_port
+  database  = "appdb"
+  username  = "ci"
+  sslmode   = "disable" # loopback hop only; Teleport encrypts host->proxy->db
   superuser = false
 }
 ```
 
-Why the tunnel rather than the certificate resource? The `cyrilgdn/postgresql`
-provider's `clientcert.cert`, `clientcert.key`, and `sslrootcert` arguments
-expect **file paths**, so the certificate path forces you to materialize PEM
-material to disk during the run. The tunnel avoids that entirely: Terraform
-connects to `localhost`, the certificate never leaves the provider process,
-and nothing sensitive is written to disk or to Terraform state.
+~> **`sslmode = "disable"` does not mean the connection is unencrypted.** It
+applies only to the **loopback hop** from the `postgresql` client to
+`127.0.0.1:<local_port>`, which never leaves the host. The tunnel then wraps
+that traffic in Teleport's mutually-authenticated TLS for the host → proxy →
+database hops, so the bytes on the wire are encrypted and authenticated by
+Teleport end-to-end. Adding TLS on the loopback hop would just be redundant
+encryption on a connection that already never leaves the machine.
 
-(If you specifically need end-to-end verify-full TLS, see the
-[certificate-based path](#appendix-certificate-based-path) appendix.)
+Why the tunnel rather than the certificate resource? The tunnel writes
+**nothing** to disk — Terraform connects to `localhost` and Teleport does the
+TLS termination in-process — and the `postgresql` provider connects with
+`sslmode = "disable"` (loopback only; see the note above), so there is no CA
+file to manage. The certificate path (below) needs one file on disk for the CA
+bundle.
+
+(If you specifically need the `postgresql` provider itself to perform
+verify-full TLS — for example to satisfy a policy that mandates it at the client
+— see the [certificate path](#certificate-path-verify-full-tls) section.)
+
+### Auditing
+
+The tunnel does not bypass Teleport's audit log. Both `tsh db login` (direct
+certificate) and the tunnel route the actual database traffic through the
+Teleport Database Service, which authenticates the per-session certificate and
+emits the same audit events — session start/end and, for protocols Teleport
+parses at the statement level (PostgreSQL, MySQL, etc.), per-query events
+containing the SQL. Events are attributed to the identity the certificate was
+issued for, along with `db_user`, `db_name`, and the database service name.
+
+In other words, queries your CI pipeline runs through the tunnel are audited
+exactly as if they had been run via `tsh db login`. Audit granularity (full
+statements vs. session-level) is a property of the Database Service's protocol
+support, not of whether you use a tunnel.
 
 ## One-time prerequisites (off the runner)
 
@@ -54,8 +78,9 @@ the CI runner.
 
 1. Create a least-privilege role for CI. See the
    [Teleport RBAC guide](./teleport-rbac.md) for the role spec; at minimum it
-   needs to read `db_server` and issue certificates for the target
-   `db_users` / `db_names`.
+   needs to read `db_server` and issue certificates for the target `db_users` /
+   `db_names`.
+
 2. Create a user (or bot) with that role:
 
    ```sh
@@ -81,25 +106,25 @@ tctl auth sign --user terraform-ci --ttl 24h --format file --out ./identity
 # paste the contents of ./identity into the TELEPORT_IDENTITY secret
 ```
 
-* **Pros**: zero binary downloads on the runner; works on the most locked-down
+- **Pros**: zero binary downloads on the runner; works on the most locked-down
   images.
-* **Cons**: the identity has a fixed TTL and must be re-signed and the secret
+- **Cons**: the identity has a fixed TTL and must be re-signed and the secret
   updated before it expires (see [rotation](#identity-file-rotation)).
 
 ### Recipe B — tbot as a workflow pre-step
 
-Download the single `tbot` binary at runtime and use a GitHub join token
-(GitHub OIDC) to write a fresh identity each run. Nothing is installed
-system-wide and there is no long-lived secret to rotate.
+Download the single `tbot` binary at runtime and use a GitHub join token (GitHub
+OIDC) to write a fresh identity each run. Nothing is installed system-wide and
+there is no long-lived secret to rotate.
 
 This requires a one-time bot + `github` join token configured on the cluster
-(see the Teleport Machine ID docs). The workflow step downloads `tbot`,
-runs it once, and points the provider at the identity it writes.
+(see the Teleport Machine ID docs). The workflow step downloads `tbot`, runs it
+once, and points the provider at the identity it writes.
 
-* **Pros**: fresh, short-lived identity each run; no static secret to rotate;
+- **Pros**: fresh, short-lived identity each run; no static secret to rotate;
   aligns with the delegated-join roadmap.
-* **Cons**: downloads a `tbot` binary each run (cache it with `actions/cache`
-  if you want); requires a join token configured on the cluster.
+- **Cons**: downloads a `tbot` binary each run (cache it with `actions/cache` if
+  you want); requires a join token configured on the cluster.
 
 ## Sample Terraform configuration
 
@@ -152,7 +177,7 @@ provider "postgresql" {
   port      = ephemeral.teleportconnect_db_tunnel.main.local_port
   database  = "appdb"
   username  = "ci"
-  sslmode   = "disable"
+  sslmode   = "disable" # loopback hop only; Teleport encrypts host->proxy->db
   superuser = false
 }
 
@@ -271,10 +296,9 @@ jobs:
 ## ALPN connection upgrade
 
 If your proxy sits behind an L7 load balancer (such as an AWS ALB) that
-terminates TLS with its own certificate, set `alpn_conn_upgrade = "yes"` on
-the provider. The default `auto` probes the proxy but is unreliable for some
-load balancers. See the
-[ALPN connection upgrade guide](./alpn-conn-upgrade.md).
+terminates TLS with its own certificate, set `alpn_conn_upgrade = "yes"` on the
+provider. The default `auto` probes the proxy but is unreliable for some load
+balancers. See the [ALPN connection upgrade guide](./alpn-conn-upgrade.md).
 
 ## RBAC
 
@@ -284,11 +308,11 @@ specific databases, users, and names the pipeline needs.
 
 ## Identity file rotation
 
-This applies to **Recipe A** only. The TTL on the signed identity must cover
-the time between rotations. The simplest model is calendar-based: an
-administrator periodically re-runs `tctl auth sign` and updates the
-`TELEPORT_IDENTITY` secret. Recipe B avoids rotation entirely by issuing a
-fresh, short-lived identity on every run.
+This applies to **Recipe A** only. The TTL on the signed identity must cover the
+time between rotations. The simplest model is calendar-based: an administrator
+periodically re-runs `tctl auth sign` and updates the `TELEPORT_IDENTITY`
+secret. Recipe B avoids rotation entirely by issuing a fresh, short-lived
+identity on every run.
 
 ## Debugging
 
@@ -301,42 +325,46 @@ TF_LOG=DEBUG terraform apply
 
 Common failures:
 
-* **`tls: failed to verify certificate`** — the proxy presented a cert your
+- **`tls: failed to verify certificate`** — the proxy presented a cert your
   runner does not trust. Confirm `alpn_conn_upgrade`, and only use
   `insecure = true` against a self-signed dev cluster.
-* **`403` / `connection error` when opening a tunnel** — the CI role likely
-  does not permit the requested database/user, or `route_to_cluster` does not
-  match. Check the role and the `cluster` argument.
-* **The `postgresql` provider hangs or resets mid-apply** — ensure nothing
+- **`403` / `connection error` when opening a tunnel** — the CI role likely does
+  not permit the requested database/user, or `route_to_cluster` does not match.
+  Check the role and the `cluster` argument.
+- **The `postgresql` provider hangs or resets mid-apply** — ensure nothing
   closes the tunnel early; it stays open for the provider's lifetime within a
   single `terraform` invocation. If you split `plan` and `apply` across jobs,
   each opens its own tunnel.
 
-## Appendix: certificate-based path
+## Certificate path (verify-full TLS)
 
-If you need end-to-end verify-full TLS (rather than the tunnel), issue a
-certificate and materialize it to disk for `cyrilgdn/postgresql`:
+When policy requires end-to-end verify-full TLS rather than the in-process
+tunnel, issue a certificate instead. The `cyrilgdn/postgresql` provider can take
+the client **certificate and key inline** (`clientcert.sslinline = true`), so
+the only thing you write to disk is the **public CA bundle** for `sslrootcert`
+(which is path-only). Nothing sensitive lands on disk.
+
+### Bare-bones pattern
 
 ```hcl
+data "teleportconnect_cluster" "this" {}
+
+data "teleportconnect_database" "main" {
+  name = "mycorp-postgres"
+}
+
 ephemeral "teleportconnect_db_certificate" "main" {
   database = data.teleportconnect_database.main.matched_name
   db_user  = "ci"
   db_name  = "appdb"
 }
 
-resource "local_sensitive_file" "ca" {
-  filename = "${path.module}/.tls/ca.pem"
-  content  = ephemeral.teleportconnect_db_certificate.main.ca_certificate
-}
-
-resource "local_sensitive_file" "cert" {
-  filename = "${path.module}/.tls/cert.pem"
-  content  = ephemeral.teleportconnect_db_certificate.main.certificate
-}
-
-resource "local_sensitive_file" "key" {
-  filename = "${path.module}/.tls/key.pem"
-  content  = ephemeral.teleportconnect_db_certificate.main.private_key
+# Only the public CA bundle is written to disk. It lives under .terraform/,
+# which Terraform already ignores. The CA is cluster-scoped, so fetch it from
+# the cluster data source once and reuse the path for every database.
+resource "local_file" "teleport_ca" {
+  filename = "${path.root}/.terraform/teleport-ca/teleport-ca.pem"
+  content  = data.teleportconnect_cluster.this.ca_certificate
 }
 
 provider "postgresql" {
@@ -345,15 +373,75 @@ provider "postgresql" {
   database    = "appdb"
   username    = "ci"
   sslmode     = "verify-full"
-  sslrootcert = local_sensitive_file.ca.filename
+  sslrootcert = local_file.teleport_ca.filename
 
   clientcert {
-    cert = local_sensitive_file.cert.filename
-    key  = local_sensitive_file.key.filename
+    cert      = ephemeral.teleportconnect_db_certificate.main.certificate
+    key       = ephemeral.teleportconnect_db_certificate.main.private_key
+    sslinline = true
   }
 }
 ```
 
-This writes the cert/key/CA to the working directory. Add a cleanup step to
-your workflow (`rm -rf .tls`) and ensure the path is never committed or
-cached.
+### Module pattern
+
+The repo ships an `examples/modules/teleport-postgresql` module that bundles the
+cluster data source, the CA `local_file`, and the ephemeral certificate behind a
+small interface:
+
+```hcl
+module "pg_appdb" {
+  source = "./modules/teleport-postgresql"
+
+  database = "mycorp-postgres"
+  db_user  = "ci"
+  db_name  = "appdb"
+}
+
+provider "postgresql" {
+  host        = module.pg_appdb.host
+  port        = module.pg_appdb.port
+  database    = module.pg_appdb.db_name
+  username    = module.pg_appdb.db_user
+  sslmode     = "verify-full"
+  sslrootcert = module.pg_appdb.sslrootcert
+
+  clientcert {
+    cert      = module.pg_appdb.certificate
+    key       = module.pg_appdb.private_key
+    sslinline = true
+  }
+}
+```
+
+### Why doesn't the provider write the CA file itself?
+
+A provider *can* technically write files from an ephemeral resource's `Open`
+(the framework does not sandbox the filesystem), but
+`teleportconnect_db_certificate` deliberately does not, because it would not
+actually reduce the on-disk footprint and it weakens the lifecycle guarantees:
+
+- **Cleanup is worse, not better.** An ephemeral resource's `Open` is guaranteed
+  to run, but its `Close` is best-effort — a cancelled job, a `SIGKILL`, or a
+  crash skips it, leaving the file behind. A `local_file` resource is tracked by
+  Terraform and removed on `destroy`, so it cleans up more reliably than a
+  provider-side write would.
+- **The provider can't know where to write.** `path.root` / `path.module` are
+  resolved by Terraform before the value ever reaches the provider, and the
+  provider's working directory is sandboxed or redirected under HCP Terraform,
+  `terraform -chdir`, Atlantis, and similar. You would have to pass an explicit
+  path anyway — at which point a file exists on disk either way.
+
+So the file is unavoidable *if* you use the certificate path, because
+`sslrootcert` is path-only. Writing it from `local_file` keeps the path explicit
+and Terraform-managed. The CA is public trust material, so `local_file` (not
+`local_sensitive_file`) is correct; the secret cert/key never touch disk — they
+stay in memory and are passed inline via `sslinline = true`.
+
+**Want zero files on disk?** Use the
+[tunnel pattern](#recommended-pattern-db_tunnel--sslmodedisable) instead. With
+`teleportconnect_db_tunnel` the `postgresql` provider connects to `localhost`
+with `sslmode = "disable"`, so there is no CA file and no `local_file` resource
+at all — nothing is written to the runner. On an ephemeral CI runner that is the
+cleanest option; reserve the certificate path for when policy mandates
+end-to-end verify-full TLS.
