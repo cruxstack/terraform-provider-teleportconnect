@@ -15,25 +15,25 @@ import (
 
 // Compile-time interface assertions.
 var (
-	_ ephemeral.EphemeralResource              = (*ephemeralDBCredentials)(nil)
-	_ ephemeral.EphemeralResourceWithConfigure = (*ephemeralDBCredentials)(nil)
+	_ ephemeral.EphemeralResource              = (*ephemeralDBCertificate)(nil)
+	_ ephemeral.EphemeralResourceWithConfigure = (*ephemeralDBCertificate)(nil)
 )
 
-// ephemeralDBCredentials issues a short-lived TLS client certificate for a
+// ephemeralDBCertificate issues a short-lived TLS client certificate for a
 // Teleport-protected database, plus the proxy host:port and trust bundle
 // needed to connect through the proxy via TLS routing.
 //
 // This is the Go-native equivalent of `tsh db login` + `tsh db config`,
 // without writing anything to disk and without requiring tsh on the runner.
-type ephemeralDBCredentials struct {
+type ephemeralDBCertificate struct {
 	pd *ProviderData
 }
 
-func newEphemeralDBCredentials() ephemeral.EphemeralResource {
-	return &ephemeralDBCredentials{}
+func newEphemeralDBCertificate() ephemeral.EphemeralResource {
+	return &ephemeralDBCertificate{}
 }
 
-type dbCredentialsModel struct {
+type dbCertificateModel struct {
 	Database tftypes.String `tfsdk:"database"`
 	Protocol tftypes.String `tfsdk:"protocol"`
 	DBUser   tftypes.String `tfsdk:"db_user"`
@@ -41,20 +41,20 @@ type dbCredentialsModel struct {
 	TTL      tftypes.String `tfsdk:"ttl"`
 	Cluster  tftypes.String `tfsdk:"cluster"`
 
-	Host tftypes.String `tfsdk:"host"`
-	Port tftypes.Int64  `tfsdk:"port"`
-	CA   tftypes.String `tfsdk:"ca"`
-	Cert tftypes.String `tfsdk:"cert"`
-	Key  tftypes.String `tfsdk:"key"`
+	Host          tftypes.String `tfsdk:"host"`
+	Port          tftypes.Int64  `tfsdk:"port"`
+	CACertificate tftypes.String `tfsdk:"ca_certificate"`
+	Certificate   tftypes.String `tfsdk:"certificate"`
+	PrivateKey    tftypes.String `tfsdk:"private_key"`
 }
 
-func (e *ephemeralDBCredentials) Metadata(_ context.Context, req ephemeral.MetadataRequest, resp *ephemeral.MetadataResponse) {
-	resp.TypeName = req.ProviderTypeName + "_db_credentials"
+func (e *ephemeralDBCertificate) Metadata(_ context.Context, req ephemeral.MetadataRequest, resp *ephemeral.MetadataResponse) {
+	resp.TypeName = req.ProviderTypeName + "_db_certificate"
 }
 
-func (e *ephemeralDBCredentials) Schema(_ context.Context, _ ephemeral.SchemaRequest, resp *ephemeral.SchemaResponse) {
+func (e *ephemeralDBCertificate) Schema(_ context.Context, _ ephemeral.SchemaRequest, resp *ephemeral.SchemaResponse) {
 	resp.Schema = ephschema.Schema{
-		Description: "Issues a short-lived database client certificate for a Teleport-protected database. The cert/key/CA can be fed into a downstream database provider (postgresql, mysql, etc.) to connect through the Teleport proxy via TLS routing.",
+		Description: "Issues a short-lived TLS client certificate for a Teleport-protected database. The certificate/private_key/ca_certificate can be fed into a downstream database provider (postgresql, mysql, etc.) to connect through the Teleport proxy via TLS routing.",
 		Attributes: map[string]ephschema.Attribute{
 			"database": ephschema.StringAttribute{
 				Required:    true,
@@ -89,17 +89,17 @@ func (e *ephemeralDBCredentials) Schema(_ context.Context, _ ephemeral.SchemaReq
 				Computed:    true,
 				Description: "Proxy port to connect to.",
 			},
-			"ca": ephschema.StringAttribute{
+			"ca_certificate": ephschema.StringAttribute{
 				Computed:    true,
 				Sensitive:   true,
 				Description: "PEM-encoded TLS CA bundle for verifying the proxy.",
 			},
-			"cert": ephschema.StringAttribute{
+			"certificate": ephschema.StringAttribute{
 				Computed:    true,
 				Sensitive:   true,
 				Description: "PEM-encoded TLS client certificate.",
 			},
-			"key": ephschema.StringAttribute{
+			"private_key": ephschema.StringAttribute{
 				Computed:    true,
 				Sensitive:   true,
 				Description: "PEM-encoded TLS client private key.",
@@ -108,7 +108,7 @@ func (e *ephemeralDBCredentials) Schema(_ context.Context, _ ephemeral.SchemaReq
 	}
 }
 
-func (e *ephemeralDBCredentials) Configure(_ context.Context, req ephemeral.ConfigureRequest, resp *ephemeral.ConfigureResponse) {
+func (e *ephemeralDBCertificate) Configure(_ context.Context, req ephemeral.ConfigureRequest, resp *ephemeral.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
@@ -123,8 +123,8 @@ func (e *ephemeralDBCredentials) Configure(_ context.Context, req ephemeral.Conf
 	e.pd = pd
 }
 
-func (e *ephemeralDBCredentials) Open(ctx context.Context, req ephemeral.OpenRequest, resp *ephemeral.OpenResponse) {
-	var data dbCredentialsModel
+func (e *ephemeralDBCertificate) Open(ctx context.Context, req ephemeral.OpenRequest, resp *ephemeral.OpenResponse) {
+	var data dbCertificateModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -170,7 +170,7 @@ func (e *ephemeralDBCredentials) Open(ctx context.Context, req ephemeral.OpenReq
 		RouteToCluster: stringOrDefault(data.Cluster.ValueString(), e.pd.Cluster),
 	})
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to issue database credentials", err.Error())
+		resp.Diagnostics.AddError("Failed to issue database certificate", err.Error())
 		return
 	}
 
@@ -182,9 +182,9 @@ func (e *ephemeralDBCredentials) Open(ctx context.Context, req ephemeral.OpenReq
 
 	data.Host = tftypes.StringValue(host)
 	data.Port = tftypes.Int64Value(int64(port))
-	data.CA = tftypes.StringValue(string(res.CAPEM))
-	data.Cert = tftypes.StringValue(string(res.CertPEM))
-	data.Key = tftypes.StringValue(string(res.KeyPEM))
+	data.CACertificate = tftypes.StringValue(string(res.CAPEM))
+	data.Certificate = tftypes.StringValue(string(res.CertPEM))
+	data.PrivateKey = tftypes.StringValue(string(res.KeyPEM))
 
 	resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
 }

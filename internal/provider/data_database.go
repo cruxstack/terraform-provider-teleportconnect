@@ -47,7 +47,7 @@ func (d *dataDatabase) Metadata(_ context.Context, req datasource.MetadataReques
 
 func (d *dataDatabase) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = dsschema.Schema{
-		Description: "Looks up a Teleport database resource by exact name and/or label match. Useful for feeding the resolved database name into a teleportconnect_db_credentials or teleportconnect_db_tunnel resource without hardcoding it.",
+		Description: "Looks up a Teleport database resource by exact name and/or label match. Useful for feeding the resolved database name into a teleportconnect_db_certificate or teleportconnect_db_tunnel resource without hardcoding it.",
 		Attributes: map[string]dsschema.Attribute{
 			"name": dsschema.StringAttribute{
 				Optional:    true,

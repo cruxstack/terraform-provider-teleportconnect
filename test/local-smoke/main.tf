@@ -64,7 +64,7 @@ data "teleportconnect_database" "smoke" {
   name = var.database_name
 }
 
-ephemeral "teleportconnect_db_credentials" "smoke" {
+ephemeral "teleportconnect_db_certificate" "smoke" {
   database = data.teleportconnect_database.smoke.matched_name
   db_user  = var.db_user
   db_name  = var.db_name
@@ -131,11 +131,11 @@ resource "terraform_data" "creds_check" {
     EOT
 
     environment = {
-      TP_HOST    = ephemeral.teleportconnect_db_credentials.smoke.host
-      TP_PORT    = ephemeral.teleportconnect_db_credentials.smoke.port
-      TP_CA      = ephemeral.teleportconnect_db_credentials.smoke.ca
-      TP_CERT    = ephemeral.teleportconnect_db_credentials.smoke.cert
-      TP_KEY     = ephemeral.teleportconnect_db_credentials.smoke.key
+      TP_HOST    = ephemeral.teleportconnect_db_certificate.smoke.host
+      TP_PORT    = ephemeral.teleportconnect_db_certificate.smoke.port
+      TP_CA      = ephemeral.teleportconnect_db_certificate.smoke.ca_certificate
+      TP_CERT    = ephemeral.teleportconnect_db_certificate.smoke.certificate
+      TP_KEY     = ephemeral.teleportconnect_db_certificate.smoke.private_key
       TP_DB_USER = var.db_user
       TP_DB_NAME = var.db_name
     }

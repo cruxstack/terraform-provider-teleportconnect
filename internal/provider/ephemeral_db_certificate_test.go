@@ -19,7 +19,7 @@ var testAccProtoV6WithEcho = map[string]func() (tfprotov6.ProviderServer, error)
 	"echo":            echoprovider.NewProviderServer(),
 }
 
-func TestAccEphemeralDBCredentials_basic(t *testing.T) {
+func TestAccEphemeralDBCertificate_basic(t *testing.T) {
 	dbName := os.Getenv("TC_DATABASE_NAME")
 	if dbName == "" {
 		t.Skip("TC_DATABASE_NAME not set; skipping")
@@ -27,14 +27,14 @@ func TestAccEphemeralDBCredentials_basic(t *testing.T) {
 	dbUser := os.Getenv("TC_DATABASE_USER")
 
 	config := testProviderConfig() + fmt.Sprintf(`
-ephemeral "teleportconnect_db_credentials" "test" {
+ephemeral "teleportconnect_db_certificate" "test" {
   database = %q
   db_user  = %q
   db_name  = "postgres"
 }
 
 provider "echo" {
-  data = ephemeral.teleportconnect_db_credentials.test
+  data = ephemeral.teleportconnect_db_certificate.test
 }
 
 resource "echo" "test" {}
@@ -50,9 +50,9 @@ resource "echo" "test" {}
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttrSet("echo.test", "data.host"),
 					resource.TestCheckResourceAttrSet("echo.test", "data.port"),
-					resource.TestMatchResourceAttr("echo.test", "data.cert", regexp.MustCompile(`BEGIN CERTIFICATE`)),
-					resource.TestMatchResourceAttr("echo.test", "data.key", regexp.MustCompile(`BEGIN PRIVATE KEY`)),
-					resource.TestMatchResourceAttr("echo.test", "data.ca", regexp.MustCompile(`BEGIN CERTIFICATE`)),
+					resource.TestMatchResourceAttr("echo.test", "data.certificate", regexp.MustCompile(`BEGIN CERTIFICATE`)),
+					resource.TestMatchResourceAttr("echo.test", "data.private_key", regexp.MustCompile(`BEGIN PRIVATE KEY`)),
+					resource.TestMatchResourceAttr("echo.test", "data.ca_certificate", regexp.MustCompile(`BEGIN CERTIFICATE`)),
 				),
 			},
 		},

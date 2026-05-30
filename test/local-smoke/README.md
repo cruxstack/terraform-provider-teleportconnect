@@ -1,7 +1,7 @@
 # Local smoke test
 
 A manual, end-to-end smoke test that drives a real Teleport-protected database
-through both `teleportconnect_db_credentials` and `teleportconnect_db_tunnel`,
+through both `teleportconnect_db_certificate` and `teleportconnect_db_tunnel`,
 then runs `psql` to confirm connectivity.
 
 This is intentionally kept out of `examples/` because it depends on `psql` and a

@@ -2,9 +2,9 @@
 // database client certificate plus the cluster TLS CA bundle.
 //
 // This is the in-process equivalent of `tsh db login` + `tsh db config`.
-// It's used both by the teleport_access_db_credentials ephemeral resource
+// It's used both by the teleportconnect_db_certificate ephemeral resource
 // (which surfaces the PEM material to downstream providers) and by
-// teleport_access_db_tunnel (which feeds the same material into a local
+// teleportconnect_db_tunnel (which feeds the same material into a local
 // ALPN proxy).
 package dbcerts
 

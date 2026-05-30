@@ -44,7 +44,7 @@ Against the bundled cluster, the following pass end-to-end:
 
 - `TestAccDataDatabase_byName` / `_byLabels`
 - `TestAccDataNode_byHostname` / `_byLabels`
-- `TestAccEphemeralDBCredentials_basic` (confirms the auth server accepts the
+- `TestAccEphemeralDBCertificate_basic` (confirms the auth server accepts the
   provider's ECDSA P-256 keys)
 - `TestAccEphemeralDBTunnel_basic`
 

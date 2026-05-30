@@ -20,8 +20,9 @@ Initial public release.
   labels.
 - `data.teleportconnect_node` — look up a Teleport SSH node by hostname and/or
   labels.
-- `ephemeral.teleportconnect_db_credentials` — issue a short-lived database
-  client certificate and the cluster CA bundle.
+- `ephemeral.teleportconnect_db_certificate` — issue a short-lived database
+  client certificate (`certificate`, `private_key`, `ca_certificate`) and the
+  proxy host/port.
 - `ephemeral.teleportconnect_db_tunnel` — open a local TCP listener proxied to a
   Teleport-protected database via TLS routing.
 - `ephemeral.teleportconnect_ssh_tunnel` — open a local TCP listener proxied

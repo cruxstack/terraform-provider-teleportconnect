@@ -3,12 +3,12 @@
 page_title: "teleportconnect_database Data Source - teleportconnect"
 subcategory: ""
 description: |-
-  Looks up a Teleport database resource by exact name and/or label match. Useful for feeding the resolved database name into a teleportconnect_db_credentials or teleportconnect_db_tunnel resource without hardcoding it.
+  Looks up a Teleport database resource by exact name and/or label match. Useful for feeding the resolved database name into a teleportconnect_db_certificate or teleportconnect_db_tunnel resource without hardcoding it.
 ---
 
 # teleportconnect_database (Data Source)
 
-Looks up a Teleport database resource by exact name and/or label match. Useful for feeding the resolved database name into a teleportconnect_db_credentials or teleportconnect_db_tunnel resource without hardcoding it.
+Looks up a Teleport database resource by exact name and/or label match. Useful for feeding the resolved database name into a teleportconnect_db_certificate or teleportconnect_db_tunnel resource without hardcoding it.
 
 ## Example Usage
 

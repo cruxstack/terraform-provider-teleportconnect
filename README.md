@@ -8,7 +8,7 @@ It is the in-process equivalent of common `tsh` workflows:
 
 | This provider                              | `tsh` equivalent                     |
 | ------------------------------------------ | ------------------------------------ |
-| `ephemeral.teleportconnect_db_credentials` | `tsh db login` + `tsh db config`     |
+| `ephemeral.teleportconnect_db_certificate` | `tsh db login` + `tsh db config`     |
 | `ephemeral.teleportconnect_db_tunnel`      | `tsh proxy db --tunnel`              |
 | `ephemeral.teleportconnect_ssh_tunnel`     | `tsh ssh -N -L LOCAL:TARGET GATEWAY` |
 | `data.teleportconnect_database`            | `tsh db ls`                          |
@@ -62,14 +62,14 @@ writes an identity file and point `identity_file_path` at it. Delegated Machine
 ID join methods (`iam`, `github`, ...) are not yet implemented in this provider;
 see the roadmap below.
 
-### Example: issue database credentials
+### Example: issue a database certificate
 
 ```hcl
 data "teleportconnect_database" "main" {
   name = "mycorp-postgres"
 }
 
-ephemeral "teleportconnect_db_credentials" "main" {
+ephemeral "teleportconnect_db_certificate" "main" {
   database = data.teleportconnect_database.main.matched_name
   db_user  = "readonly"
   db_name  = "appdb"

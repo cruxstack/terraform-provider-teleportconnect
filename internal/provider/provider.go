@@ -275,7 +275,7 @@ func (p *teleportconnectProvider) DataSources(_ context.Context) []func() dataso
 
 func (p *teleportconnectProvider) EphemeralResources(_ context.Context) []func() ephemeral.EphemeralResource {
 	return []func() ephemeral.EphemeralResource{
-		newEphemeralDBCredentials,
+		newEphemeralDBCertificate,
 		newEphemeralDBTunnel,
 		newEphemeralSSHTunnel,
 	}
