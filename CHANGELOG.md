@@ -8,6 +8,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-30
+
 ### Added
 
 - Delegated Machine ID join auth mode: set `join_method` + `join_token` (and
@@ -28,6 +30,12 @@ and this project adheres to
 - CI guide certificate path rewritten to pass the client certificate and key
   inline via `clientcert.sslinline = true`, leaving only the public CA bundle on
   disk (one `local_file` instead of three `local_sensitive_file`s).
+
+### Upgrade notes
+
+- No breaking changes. The existing `use_local_profile`, `identity_file_path`,
+  and `identity_file_data` modes are unchanged; `join_method` is purely additive
+  and mutually exclusive with them.
 
 ## [0.1.0] - 2026-05-30
 
@@ -71,4 +79,5 @@ Initial public release.
 - SSH host keys are verified against the cluster SSH host CAs (no TOFU).
 
 [0.1.0]: https://github.com/cruxstack/terraform-provider-teleportconnect/releases/tag/v0.1.0
-[unreleased]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.1.0...HEAD
+[0.2.0]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.1.0...v0.2.0
+[unreleased]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.2.0...HEAD
