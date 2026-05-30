@@ -8,19 +8,7 @@ and this project adheres to
 
 ## [Unreleased]
 
-### Added
-
-- CI usage guide covering minimal self-hosted GitHub Actions runners,
-  identity-file vs. `tbot` authentication, and integration with the
-  `cyrilgdn/postgresql` provider via the `db_tunnel` ephemeral resource.
-
-### Changed
-
-- Moved the hand-written guides into `templates/guides/` so `tfplugindocs` no
-  longer deletes them when regenerating `docs/`.
-- Renamed the `make generate` target to `make docs`.
-
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-05-30
 
 Initial public release.
 
@@ -41,6 +29,9 @@ Initial public release.
   through a Teleport-managed SSH gateway node.
 - `alpn_conn_upgrade` option to control HTTPS connection upgrade for proxies
   behind L7 load balancers.
+- CI usage guide covering minimal self-hosted GitHub Actions runners,
+  identity-file vs. `tbot` authentication, and integration with the
+  `cyrilgdn/postgresql` provider via the `db_tunnel` ephemeral resource.
 
 ### Fixed
 
