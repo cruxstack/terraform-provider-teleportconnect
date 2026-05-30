@@ -110,7 +110,9 @@ ephemeral "teleportconnect_ssh_tunnel" "db" {
 ```
 
 See [`docs/`](./docs) for full reference documentation and the
-[`examples/`](./examples) directory for runnable configurations.
+[`examples/`](./examples) directory for runnable configurations. For running the
+provider in CI (e.g. self-hosted GitHub Actions runners) against the
+`cyrilgdn/postgresql` provider, see the [CI usage guide](./docs/guides/ci.md).
 
 ## ALPN connection upgrade
 
@@ -150,8 +152,8 @@ make test
 # acceptance tests (requires a live cluster + TF_ACC=1 + env vars)
 make testacc
 
-# regenerate docs from schema + examples
-make generate
+# regenerate registry docs from schema, examples, and templates/guides
+make docs
 ```
 
 ### Running against a local cluster

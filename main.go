@@ -10,8 +10,9 @@ import (
 	"github.com/cruxstack/terraform-provider-teleportconnect/internal/provider"
 )
 
-// Generate the Terraform Registry documentation from the provider schema and
-// the examples/ directory. Run with `make generate`.
+// Generate the Terraform Registry documentation from the provider schema, the
+// examples/ directory, and the hand-written guides under templates/guides/.
+// Run with `make docs`.
 //go:generate go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate --provider-name teleportconnect
 
 // version is set at build time via -ldflags. The default "dev" suffix marks

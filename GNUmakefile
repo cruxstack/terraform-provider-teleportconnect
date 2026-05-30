@@ -54,9 +54,12 @@ testacc:
 testacc-local:
 	./test/integration/run.sh
 
-# Regenerate registry documentation from the provider schema + examples.
-.PHONY: generate
-generate:
+# Regenerate registry documentation from the provider schema, the examples/
+# directory, and the hand-written guides under templates/guides/. The
+# underlying mechanism is `go generate ./...` (see the //go:generate directive
+# in main.go).
+.PHONY: docs
+docs:
 	go generate ./...
 
 .PHONY: clean
