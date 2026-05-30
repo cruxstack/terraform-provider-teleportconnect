@@ -13,15 +13,13 @@ import (
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
-// Compile-time interface assertions.
 var (
 	_ datasource.DataSource              = (*dataDatabase)(nil)
 	_ datasource.DataSourceWithConfigure = (*dataDatabase)(nil)
 )
 
-// dataDatabase looks up a Teleport database resource by name or labels.
-// It is the in-process equivalent of `tsh db ls --search` / `tsh db ls
-// --query 'labels[...]==...'`.
+// dataDatabase looks up a Teleport database by name and/or labels, like
+// `tsh db ls`.
 type dataDatabase struct {
 	pd *ProviderData
 }
@@ -122,11 +120,8 @@ func (d *dataDatabase) Read(ctx context.Context, req datasource.ReadRequest, res
 		return
 	}
 
-	// We use GetDatabaseServers (the heartbeats from db services) rather
-	// than GetDatabases (the centralized Database registry). Most user
-	// roles allow reading db_server but not db, and tsh db ls uses the
-	// same path. Multiple servers may advertise the same Database; we
-	// dedupe by name.
+	// GetDatabaseServers (db_server heartbeats), not GetDatabases: most roles
+	// can read db_server but not db, matching `tsh db ls`. Dedupe by name.
 	tflog.Debug(ctx, "looking up teleport database", map[string]any{
 		"name":   wantName,
 		"labels": wantLabels,
@@ -164,7 +159,6 @@ func (d *dataDatabase) Read(ctx context.Context, req datasource.ReadRequest, res
 			fmt.Sprintf("No database matched name=%q labels=%v.", wantName, wantLabels))
 		return
 	case 1:
-		// ok
 	default:
 		names := make([]string, 0, len(matches))
 		for _, m := range matches {

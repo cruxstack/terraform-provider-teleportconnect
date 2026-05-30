@@ -15,8 +15,8 @@ import (
 	"github.com/cruxstack/terraform-provider-teleportconnect/internal/tunnel"
 )
 
-// jsonStr round-trips a string through JSON encode/decode for use with the
-// framework's private state, which requires JSON-encoded values.
+// jsonStr/unjsonStr encode strings for the framework's private state, which
+// requires JSON values.
 func jsonStr(s string) []byte {
 	b, _ := json.Marshal(s)
 	return b
@@ -30,24 +30,19 @@ func unjsonStr(b []byte) (string, error) {
 	return s, nil
 }
 
-// Compile-time interface assertions.
 var (
 	_ ephemeral.EphemeralResource              = (*ephemeralDBTunnel)(nil)
 	_ ephemeral.EphemeralResourceWithConfigure = (*ephemeralDBTunnel)(nil)
 	_ ephemeral.EphemeralResourceWithClose     = (*ephemeralDBTunnel)(nil)
 )
 
-// privateKeyTunnelID names the private-state slot used to round-trip the
-// tunnel registry ID from Open to Close. JSON-encoded string.
+// privateKeyTunnelID is the private-state slot that round-trips the tunnel
+// registry ID from Open to Close.
 const privateKeyTunnelID = "tunnel_id"
 
-// ephemeralDBTunnel opens a local TCP listener that proxies connections
-// through the Teleport proxy via TLS routing. Downstream providers
-// (postgresql, mysql, etc.) connect to localhost:<local_port> as if they
-// were talking to the database directly; the tunnel handles all the
-// Teleport authentication and ALPN routing transparently.
-//
-// This is the in-process equivalent of `tsh proxy db --tunnel`.
+// ephemeralDBTunnel opens a local TCP listener proxied to a Teleport database
+// via TLS routing, so downstream providers connect to localhost without certs:
+// the in-process equivalent of `tsh proxy db --tunnel`.
 type ephemeralDBTunnel struct {
 	pd *ProviderData
 }
@@ -163,8 +158,6 @@ func (e *ephemeralDBTunnel) Open(ctx context.Context, req ephemeral.OpenRequest,
 		"db_name":  data.DBName.ValueString(),
 	})
 
-	// Issue a fresh database cert. The tunnel TLS-handshakes to the proxy
-	// using this cert, which carries the RouteToDatabase routing claim.
 	cred, err := dbcerts.Issue(ctx, e.pd.Client, dbcerts.Request{
 		Database:       dbName,
 		Protocol:       data.Protocol.ValueString(),
@@ -178,9 +171,8 @@ func (e *ephemeralDBTunnel) Open(ctx context.Context, req ephemeral.OpenRequest,
 		return
 	}
 
-	// We use context.Background as the tunnel's parent because the tunnel
-	// must outlive the Open RPC. The provider's Close handler (or
-	// CloseAll on shutdown) is what tears it down.
+	// context.Background: the tunnel must outlive the Open RPC; Close (or
+	// CloseAll on shutdown) tears it down.
 	t, err := tunnel.NewDBTunnel(context.Background(), tunnel.DBOptions{
 		ProxyAddress:  e.pd.ProxyAddress,
 		Protocol:      cred.Protocol,
@@ -211,15 +203,12 @@ func (e *ephemeralDBTunnel) Open(ctx context.Context, req ephemeral.OpenRequest,
 	data.LocalPort = tftypes.Int64Value(int64(t.LocalPort()))
 	resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
-		// Set failed: avoid leaking the tunnel.
 		if got, ok := e.pd.Tunnels.Take(id); ok {
 			_ = got.Close()
 		}
 		return
 	}
 
-	// Stash the registry ID so Close can find this tunnel. The framework
-	// requires private state values to be valid JSON.
 	resp.Diagnostics.Append(resp.Private.SetKey(ctx, privateKeyTunnelID, jsonStr(id))...)
 }
 
@@ -242,8 +231,7 @@ func (e *ephemeralDBTunnel) Close(ctx context.Context, req ephemeral.CloseReques
 	}
 	t, ok := e.pd.Tunnels.Take(id)
 	if !ok {
-		// Already closed or never registered; nothing to do.
-		return
+		return // already closed or never registered
 	}
 	if err := t.Close(); err != nil {
 		resp.Diagnostics.AddWarning("Tunnel close error", err.Error())

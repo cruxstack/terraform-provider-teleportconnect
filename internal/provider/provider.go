@@ -23,16 +23,13 @@ import (
 	"github.com/cruxstack/terraform-provider-teleportconnect/internal/auth"
 )
 
-// Compile-time interface assertions.
 var (
 	_ provider.Provider                       = (*teleportconnectProvider)(nil)
 	_ provider.ProviderWithEphemeralResources = (*teleportconnectProvider)(nil)
 )
 
-// teleportconnectProvider is the root provider type. The version field is set
-// at build time via main and surfaced in user-agent strings.
 type teleportconnectProvider struct {
-	version string
+	version string // set at build time, surfaced in user-agent strings
 }
 
 // New returns a constructor compatible with providerserver.Serve.
@@ -42,12 +39,9 @@ func New(version string) func() provider.Provider {
 	}
 }
 
-// ALPNConnUpgradeMode controls whether tunnels do an HTTPS upgrade dance
-// before TLS routing. Some L7 load balancers (e.g. AWS ALB) negotiate ALPN
-// values back to the client but still terminate TLS with their own cert,
-// which fools direct TLS-routing. The "auto" probe in the upstream
-// teleport API (`IsALPNConnUpgradeRequired`) is documented as unreliable
-// for many real-world setups, so we expose an explicit override.
+// ALPNConnUpgradeMode controls whether tunnels do an HTTPS upgrade before TLS
+// routing. Some L7 LBs (e.g. AWS ALB) terminate TLS with their own cert and
+// fool the upstream auto-probe, so we expose an explicit override.
 type ALPNConnUpgradeMode int
 
 const (
@@ -56,36 +50,24 @@ const (
 	ALPNNo
 )
 
-// ProviderData is the value stashed into ResourceData/EphemeralResourceData/
-// DataSourceData. Resources call .Client to get the connected *client.Client
-// and .ProxyAddress for tunnel/ALPN bootstrapping. Tunnels stores active
-// local listeners keyed by an opaque ID so Close handlers can tear them
-// down deterministically.
+// ProviderData is shared with every resource, data source, and ephemeral
+// resource via the framework's *Data fields.
 type ProviderData struct {
 	Client       *client.Client
 	ProxyAddress string
-	// Cluster is the user-supplied leaf-cluster override (may be empty,
-	// meaning "the cluster the proxy belongs to"). Used for cert
-	// RouteToCluster.
-	Cluster string
-	// ClusterName is the proxy's own cluster name resolved from Ping. The
-	// SSH tunnel transport requires a concrete cluster name for DialHost,
-	// so this is used as the fallback when no override is set.
+	Cluster      string // leaf-cluster override for cert RouteToCluster; may be empty
+	// ClusterName is the proxy's own cluster, resolved from Ping. SSH
+	// DialHost needs a concrete cluster, so it falls back to this.
 	ClusterName     string
 	ALPNConnUpgrade ALPNConnUpgradeMode
-
-	// Insecure mirrors the provider's insecure flag. Tunnels need it to skip
-	// proxy TLS verification when talking to a self-signed cluster.
-	Insecure bool
-
-	// Tunnels is shared across ephemeral resources to track listeners that
-	// must outlive a single Open call (the listener goroutine has to live
-	// until Close fires or the provider plugin process exits).
+	Insecure        bool
+	// Tunnels tracks listeners that must outlive a single Open call, until
+	// Close fires or the plugin process exits.
 	Tunnels *TunnelRegistry
 }
 
-// providerModel mirrors the HCL schema. Optional fields use types.* so we can
-// distinguish unset from empty when validating mutually exclusive auth modes.
+// providerModel mirrors the HCL schema. types.* fields distinguish unset from
+// empty when validating mutually exclusive auth modes.
 type providerModel struct {
 	ProxyAddress     types.String `tfsdk:"proxy_address"`
 	Cluster          types.String `tfsdk:"cluster"`
@@ -100,8 +82,6 @@ type providerModel struct {
 }
 
 func (p *teleportconnectProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
-	// TypeName drives resource prefixes and the default local alias in
-	// required_providers. Keep this in sync with the registry source.
 	resp.TypeName = "teleportconnect"
 	resp.Version = p.version
 }
@@ -155,9 +135,8 @@ func (p *teleportconnectProvider) Schema(_ context.Context, _ provider.SchemaReq
 	}
 }
 
-// Configure parses provider config, validates that exactly one auth method
-// is set, builds an authenticated Teleport API client, and stashes a
-// *ProviderData on the response so resources/data sources can reach it.
+// Configure validates config, builds an authenticated Teleport client, and
+// stashes a *ProviderData for resources and data sources to reach.
 func (p *teleportconnectProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
 	var cfg providerModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &cfg)...)
@@ -165,8 +144,7 @@ func (p *teleportconnectProvider) Configure(ctx context.Context, req provider.Co
 		return
 	}
 
-	// During plan when the value is unknown we cannot proceed; surface a
-	// clear error rather than passing zero-values into auth.Build.
+	// Unknown at plan time: fail clearly rather than dialing a zero value.
 	if cfg.ProxyAddress.IsUnknown() {
 		resp.Diagnostics.AddAttributeError(
 			path.Root("proxy_address"),
@@ -176,8 +154,6 @@ func (p *teleportconnectProvider) Configure(ctx context.Context, req provider.Co
 		return
 	}
 
-	// Validate the proxy_address format up front so users get a clear
-	// error instead of an opaque dial failure later.
 	proxyAddress := strings.TrimSpace(cfg.ProxyAddress.ValueString())
 	if _, _, err := net.SplitHostPort(proxyAddress); err != nil {
 		resp.Diagnostics.AddAttributeError(
@@ -188,8 +164,6 @@ func (p *teleportconnectProvider) Configure(ctx context.Context, req provider.Co
 		return
 	}
 
-	// Parse the ALPN upgrade mode before building the client so config
-	// errors are reported without opening a connection first.
 	upgradeMode, err := parseALPNUpgradeMode(cfg.ALPNConnUpgrade.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddAttributeError(
@@ -231,10 +205,7 @@ func (p *teleportconnectProvider) Configure(ctx context.Context, req provider.Co
 		return
 	}
 
-	// Sanity ping: confirm the connection is actually authenticated by
-	// fetching cluster info. Failures here surface bad credentials at
-	// configure time rather than during a later resource read. Close the
-	// client if the ping fails so we don't leak the connection.
+	// Ping confirms the credentials work now, not at first resource read.
 	pi, err := clt.Ping(ctx)
 	if err != nil {
 		_ = clt.Close()
@@ -259,15 +230,11 @@ func (p *teleportconnectProvider) Configure(ctx context.Context, req provider.Co
 		Tunnels:         NewTunnelRegistry(),
 	}
 
-	// Hand the same handle to all three surfaces so resources, data sources,
-	// and ephemeral resources share the connection.
 	resp.ResourceData = pd
 	resp.DataSourceData = pd
 	resp.EphemeralResourceData = pd
 }
 
-// parseALPNUpgradeMode maps the user-facing alpn_conn_upgrade string to the
-// internal mode enum. Empty or "auto" => ALPNAuto.
 func parseALPNUpgradeMode(v string) (ALPNConnUpgradeMode, error) {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "", "auto":

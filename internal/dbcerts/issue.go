@@ -1,11 +1,6 @@
-// Package dbcerts wraps the Teleport API calls needed to issue a short-lived
-// database client certificate plus the cluster TLS CA bundle.
-//
-// This is the in-process equivalent of `tsh db login` + `tsh db config`.
-// It's used both by the teleportconnect_db_certificate ephemeral resource
-// (which surfaces the PEM material to downstream providers) and by
-// teleportconnect_db_tunnel (which feeds the same material into a local
-// ALPN proxy).
+// Package dbcerts issues a short-lived database client certificate plus the
+// cluster TLS CA bundle: the in-process equivalent of `tsh db login` +
+// `tsh db config`. Used by both the db_certificate and db_tunnel resources.
 package dbcerts
 
 import (
@@ -28,37 +23,24 @@ import (
 
 // Request describes a single database certificate issuance.
 type Request struct {
-	// Database is the Teleport database service name (matches `tsh db ls`).
-	Database string
-	// Protocol is the database protocol (e.g. "postgres"). When empty,
-	// Issue looks it up from the Teleport database resource.
-	Protocol string
-	// DBUser is the database user to embed in the cert.
-	DBUser string
-	// DBName is the database name to embed in the cert.
-	DBName string
-	// TTL is how long the cert should be valid. Zero means 1h.
-	TTL time.Duration
-	// RouteToCluster overrides the route_to_cluster field. Empty means
-	// "let the auth server pick the cluster the proxy belongs to".
-	RouteToCluster string
+	Database       string        // Teleport database service name
+	Protocol       string        // e.g. "postgres"; empty => looked up
+	DBUser         string        // embedded in the cert
+	DBName         string        // embedded in the cert
+	TTL            time.Duration // zero defaults to 1h
+	RouteToCluster string        // empty => the proxy's own cluster
 }
 
 // Result is the material returned by Issue.
 type Result struct {
-	// CertPEM is the PEM-encoded TLS client certificate.
-	CertPEM []byte
-	// KeyPEM is the PEM-encoded ECDSA P-256 private key (PKCS#8).
-	KeyPEM []byte
-	// CAPEM is the PEM-encoded cluster TLS CA bundle.
-	CAPEM []byte
-	// Protocol is the resolved protocol (useful when Request.Protocol was empty).
-	Protocol string
+	CertPEM  []byte
+	KeyPEM   []byte // ECDSA P-256, PKCS#8
+	CAPEM    []byte // cluster TLS CA bundle
+	Protocol string // resolved protocol (useful when Request.Protocol was empty)
 }
 
-// Issue generates a fresh keypair, asks the Teleport auth service to sign a
-// database-scoped user certificate, and returns the certs material plus the
-// cluster TLS CA bundle.
+// Issue generates a keypair, has Teleport sign a database-scoped cert, and
+// returns the cert material plus the cluster TLS CA bundle.
 func Issue(ctx context.Context, c *client.Client, req Request) (*Result, error) {
 	if c == nil {
 		return nil, errors.New("teleport client is nil")
@@ -145,11 +127,8 @@ func Issue(ctx context.Context, c *client.Client, req Request) (*Result, error) 
 	}, nil
 }
 
-// lookupProtocol asks the auth service for the database resource's protocol
-// so callers don't have to hard-code it. Uses GetDatabaseServers (heartbeats
-// from db services) which mirrors what `tsh db ls` shows; the
-// GetDatabases call returns the centralized Database registry which most
-// users don't have RBAC to read directly.
+// lookupProtocol resolves the database's protocol via GetDatabaseServers
+// (db_server heartbeats), which most roles can read, unlike GetDatabases.
 func lookupProtocol(ctx context.Context, c *client.Client, name string) (string, error) {
 	servers, err := c.GetDatabaseServers(ctx, defaults.Namespace)
 	if err != nil {

@@ -53,8 +53,6 @@ func hasPort(addr string) bool {
 // port is treated as host-only and defaults to the standard HTTPS port.
 func proxyHostPort(addr string) (host string, port int, err error) {
 	if !hasPort(addr) {
-		// No port present: use the whole input as the host and default
-		// the port. This is an expected case, not an error.
 		return addr, defaults.StandardHTTPSPort, nil
 	}
 	h, p, _ := net.SplitHostPort(addr)

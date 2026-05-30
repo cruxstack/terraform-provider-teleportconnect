@@ -12,11 +12,9 @@ import (
 )
 
 // fetchGitHub requests an OIDC token from the GitHub Actions token service.
-// The workflow must grant `permissions: id-token: write`, which causes the
-// runner to expose ACTIONS_ID_TOKEN_REQUEST_URL and
-// ACTIONS_ID_TOKEN_REQUEST_TOKEN. When audience is set it is passed as the
-// `audience` query parameter so the resulting JWT carries the matching `aud`
-// claim Teleport's github join token expects.
+// The workflow must grant `permissions: id-token: write` (which exposes the
+// ACTIONS_ID_TOKEN_REQUEST_* env vars). audience, when set, becomes the
+// requested `aud` claim.
 func fetchGitHub(ctx context.Context, audience string) (string, error) {
 	reqURL := os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL")
 	reqToken := os.Getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")

@@ -19,13 +19,9 @@ import (
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
-// ALPN wire protocol values for Teleport database access. Values mirror
-// what `tsh proxy db --tunnel` and the Teleport proxy expect; they're
-// part of the public protocol contract even though they live in the GPL
-// portion of the Teleport tree (lib/srv/alpnproxy/common/protocols.go).
-// They are hardcoded here so this provider does not need to link the GPL/
-// AGPL portions of the Teleport source. If upstream renames an ALPN value
-// in a future release, the tunnel for that protocol must be updated here.
+// ALPN wire protocol values for Teleport database access. Hardcoded (rather
+// than imported) so this provider need not link Teleport's GPL/AGPL packages;
+// the values live upstream in lib/srv/alpnproxy/common/protocols.go.
 const (
 	alpnPostgres      = "teleport-postgres"
 	alpnMySQL         = "teleport-mysql"
@@ -39,9 +35,8 @@ const (
 	alpnSpanner       = "teleport-spanner"
 )
 
-// ALPNForProtocol maps a Teleport database protocol (matches the Protocol
-// field on a database resource, e.g. "postgres") to the ALPN wire value
-// used during the TLS handshake with the Teleport proxy.
+// ALPNForProtocol maps a Teleport database protocol (e.g. "postgres") to the
+// ALPN wire value used in the TLS handshake with the proxy.
 func ALPNForProtocol(protocol string) (string, error) {
 	switch strings.ToLower(protocol) {
 	case "postgres", "postgresql":
@@ -74,32 +69,23 @@ func ALPNForProtocol(protocol string) (string, error) {
 type ALPNUpgradeMode int
 
 const (
-	// ALPNUpgradeAuto probes the proxy via tpclient.IsALPNConnUpgradeRequired.
-	ALPNUpgradeAuto ALPNUpgradeMode = iota
-	// ALPNUpgradeYes forces the upgrade dance (needed when the proxy is
-	// behind an L7 LB that terminates TLS with its own cert).
-	ALPNUpgradeYes
-	// ALPNUpgradeNo disables the upgrade and uses direct TLS routing.
-	ALPNUpgradeNo
+	ALPNUpgradeAuto ALPNUpgradeMode = iota // probe via IsALPNConnUpgradeRequired
+	ALPNUpgradeYes                         // force upgrade (L7 LB fronting the proxy)
+	ALPNUpgradeNo                          // direct TLS routing
 )
 
 // DBOptions configures a DBTunnel.
 type DBOptions struct {
-	// ProxyAddress is the Teleport proxy host:port the tunnel dials.
 	ProxyAddress string
-	// Protocol is the Teleport database protocol (e.g. "postgres").
-	Protocol string
-	// ClientCertPEM, ClientKeyPEM and CAPEM are the Teleport-issued
-	// database client cert (with RouteToDatabase baked in), its
-	// matching private key, and the cluster TLS CA bundle.
+	Protocol     string
+	// ClientCertPEM carries the RouteToDatabase routing claim; with
+	// ClientKeyPEM and CAPEM it is the Teleport-issued database client
+	// keypair plus the cluster TLS CA bundle.
 	ClientCertPEM []byte
 	ClientKeyPEM  []byte
 	CAPEM         []byte
-	// ListenAddr is the local address to listen on, e.g. "127.0.0.1:0"
-	// for an OS-assigned port.
-	ListenAddr string
-	// ALPNUpgrade selects the ALPN connection upgrade behavior.
-	ALPNUpgrade ALPNUpgradeMode
+	ListenAddr    string // empty defaults to 127.0.0.1:0
+	ALPNUpgrade   ALPNUpgradeMode
 }
 
 // DBTunnel is a goroutine-backed local TCP listener that forwards each
@@ -165,10 +151,6 @@ func NewDBTunnel(parent context.Context, opts DBOptions) (*DBTunnel, error) {
 		MinVersion:   tls.VersionTLS12,
 	}
 
-	// Decide whether to do the HTTPS connection upgrade dance. Some L7
-	// LBs (AWS ALB, etc.) negotiate ALPN values back to the client but
-	// still terminate TLS with their own cert, fooling the auto-probe.
-	// Callers can override the auto-decision via DBOptions.ALPNUpgrade.
 	upgradeRequired := false
 	switch opts.ALPNUpgrade {
 	case ALPNUpgradeYes:
@@ -214,8 +196,7 @@ func NewDBTunnel(parent context.Context, opts DBOptions) (*DBTunnel, error) {
 	return t, nil
 }
 
-// LocalHost returns the address the tunnel is listening on (typically
-// "127.0.0.1").
+// LocalHost returns the address the tunnel is listening on.
 func (t *DBTunnel) LocalHost() string {
 	if a, ok := t.listener.Addr().(*net.TCPAddr); ok {
 		return a.IP.String()
@@ -223,7 +204,7 @@ func (t *DBTunnel) LocalHost() string {
 	return "127.0.0.1"
 }
 
-// LocalPort returns the OS-assigned local port the tunnel is listening on.
+// LocalPort returns the OS-assigned local port.
 func (t *DBTunnel) LocalPort() int {
 	if a, ok := t.listener.Addr().(*net.TCPAddr); ok {
 		return a.Port
@@ -274,9 +255,7 @@ func (t *DBTunnel) acceptLoop() {
 	for {
 		client, err := t.listener.Accept()
 		if err != nil {
-			// Listener was closed (Close() called) or unrecoverable error.
-			// Either way we exit; new connections won't be served.
-			return
+			return // listener closed or unrecoverable
 		}
 		if !t.trackConn(client) {
 			_ = client.Close()
@@ -292,9 +271,6 @@ func (t *DBTunnel) handleConn(client net.Conn) {
 	defer t.untrackConn(client)
 	defer func() { _ = client.Close() }()
 
-	// Per-connection upstream dial through the ALPN dialer. The dialer
-	// internally handles HTTPS upgrade for L7-LB-fronted proxies and
-	// performs the TLS-routing handshake with our client cert.
 	upstream, err := t.alpnDialer.DialContext(t.ctx, "tcp", t.proxyAddr)
 	if err != nil {
 		tflog.Error(t.ctx, "database tunnel upstream dial failed", map[string]any{
@@ -310,8 +286,6 @@ func (t *DBTunnel) handleConn(client net.Conn) {
 		})
 	}
 
-	// Pipe in both directions concurrently. When either side closes,
-	// propagate close to the other to avoid orphaned half-open sockets.
 	done := make(chan struct{}, 2)
 	go func() {
 		_, _ = io.Copy(upstream, client)

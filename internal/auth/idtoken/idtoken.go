@@ -48,11 +48,9 @@ func IsSupported(method string) bool {
 	return ok
 }
 
-// fetcher fetches an identity token for a single join method.
 type fetcher func(ctx context.Context, audience string) (string, error)
 
-// fetchers maps a join method name to its token fetcher. Kept in one place so
-// Supported()/IsSupported() stay in sync with what Fetch() can actually do.
+// fetchers is the single source of truth for supported join methods.
 var fetchers = map[string]fetcher{
 	"github":     fetchGitHub,
 	"gitlab":     fetchGitLab,

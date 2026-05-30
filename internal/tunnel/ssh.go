@@ -19,44 +19,27 @@ import (
 
 // SSHOptions configures an SSHTunnel.
 type SSHOptions struct {
-	// ProxyAddress is the Teleport proxy host:port the tunnel dials.
 	ProxyAddress string
-	// Cluster is the Teleport cluster to route through. Empty defaults to
-	// the cluster the proxy belongs to.
-	Cluster string
-	// GatewayNode is the Teleport node hostname the SSH session is opened
-	// against (the "jump host"). Required.
-	GatewayNode string
-	// TargetHost / TargetPort is the address to forward to from the
-	// gateway node, equivalent to the right-hand side of `ssh -L
-	// LOCAL:TARGET_HOST:TARGET_PORT GATEWAY`.
-	TargetHost string
-	TargetPort int
-	// SSHLogin is the OS user to authenticate as on the gateway node.
-	SSHLogin string
+	Cluster      string // empty defaults to the proxy's own cluster
+	GatewayNode  string // SSH jump host
+	TargetHost   string
+	TargetPort   int
+	SSHLogin     string
 
-	// SSHCert / PrivateKey / SSHCAs come from sshcerts.Issue. The cert is
-	// presented as the SSH client identity; the SSH CAs are used for the
-	// HostKeyCallback so we trust Teleport-issued host keys.
+	// SSHCert/PrivateKey/SSHCAs come from sshcerts.Issue: the cert is the
+	// client identity, the CAs back the HostKeyCallback that trusts only
+	// Teleport-issued host keys.
 	SSHCert    *ssh.Certificate
 	PrivateKey crypto.Signer
 	SSHCAs     [][]byte
 
-	// TLSConfig is the mTLS config used to talk to the proxy's gRPC
-	// transport (TLS routing). Typically obtained from
+	// TLSConfig talks to the proxy's gRPC transport, typically from
 	// (*client.Client).Config().
 	TLSConfig *tls.Config
 
-	// Insecure skips verification of the proxy's TLS certificate, matching
-	// the provider's insecure flag. Only for self-signed dev clusters.
-	Insecure bool
-
-	// ALPNUpgrade selects the ALPN connection upgrade behavior, mirroring
-	// the DB tunnel's behavior. Required for L7-LB-fronted proxies.
+	Insecure    bool // skip proxy cert verification; dev clusters only
 	ALPNUpgrade ALPNUpgradeMode
-
-	// ListenAddr is the local address to listen on, e.g. "127.0.0.1:0".
-	ListenAddr string
+	ListenAddr  string // empty defaults to 127.0.0.1:0
 }
 
 // SSHTunnel is a goroutine-backed local TCP listener that forwards each
@@ -82,9 +65,8 @@ type SSHTunnel struct {
 	wg     sync.WaitGroup
 }
 
-// NewSSHTunnel issues nothing on its own (callers pass an already-issued
-// SSH cert via opts) but does establish the SSH session to the gateway
-// node and starts the local accept loop.
+// NewSSHTunnel establishes the SSH session to the gateway node (using the
+// cert supplied in opts) and starts the local accept loop.
 func NewSSHTunnel(parent context.Context, opts SSHOptions) (*SSHTunnel, error) {
 	if opts.ProxyAddress == "" {
 		return nil, errors.New("proxy_address is required")
@@ -105,9 +87,6 @@ func NewSSHTunnel(parent context.Context, opts SSHOptions) (*SSHTunnel, error) {
 		return nil, errors.New("TLSConfig is required (typically from (*client.Client).Config())")
 	}
 
-	// Build the SSH client config. Auth uses the Teleport-signed cert; the
-	// host key callback trusts only keys signed by the cluster's SSH host
-	// CAs (no TOFU, no static authorized_keys).
 	signer, err := ssh.NewSignerFromKey(opts.PrivateKey)
 	if err != nil {
 		return nil, fmt.Errorf("building ssh signer: %w", err)
@@ -127,9 +106,8 @@ func NewSSHTunnel(parent context.Context, opts SSHOptions) (*SSHTunnel, error) {
 		Timeout:         15 * time.Second,
 	}
 
-	// Pick ALPN upgrade behavior. tpproxy.NewClient has no auto-detect
-	// helper, so auto mode leaves the upgrade off; callers who know their
-	// proxy is behind an L7 LB should pass ALPNUpgradeYes explicitly.
+	// tpproxy.NewClient has no auto-detect, so auto mode leaves the upgrade
+	// off; L7-LB-fronted proxies must pass ALPNUpgradeYes explicitly.
 	upgradeRequired := opts.ALPNUpgrade == ALPNUpgradeYes
 
 	pc, err := tpproxy.NewClient(parent, tpproxy.ClientConfig{
@@ -151,10 +129,8 @@ func NewSSHTunnel(parent context.Context, opts SSHOptions) (*SSHTunnel, error) {
 		return nil, fmt.Errorf("opening proxy client: %w", err)
 	}
 
-	// DialHost asks the proxy to forward us to the SSH service on the
-	// gateway node. The returned conn is a raw stream the proxy is
-	// piping to the node's SSH listener; we layer SSH client protocol
-	// on top of it ourselves.
+	// DialHost returns a raw stream piped to the node's SSH listener; we
+	// layer the SSH client protocol on top ourselves.
 	hostConn, _, err := pc.DialHost(parent, opts.GatewayNode+":0", opts.Cluster, nil)
 	if err != nil {
 		_ = pc.Close()
@@ -201,7 +177,7 @@ func NewSSHTunnel(parent context.Context, opts SSHOptions) (*SSHTunnel, error) {
 	return t, nil
 }
 
-// LocalHost / LocalPort mirror DBTunnel for symmetry.
+// LocalHost returns the address the tunnel is listening on.
 func (t *SSHTunnel) LocalHost() string {
 	if a, ok := t.listener.Addr().(*net.TCPAddr); ok {
 		return a.IP.String()
@@ -209,6 +185,7 @@ func (t *SSHTunnel) LocalHost() string {
 	return "127.0.0.1"
 }
 
+// LocalPort returns the OS-assigned local port.
 func (t *SSHTunnel) LocalPort() int {
 	if a, ok := t.listener.Addr().(*net.TCPAddr); ok {
 		return a.Port
@@ -309,15 +286,12 @@ func (t *SSHTunnel) handleConn(client net.Conn) {
 }
 
 // makeHostKeyCallback builds an ssh.HostKeyCallback that accepts host keys
-// signed by any of the supplied SSH CAs (in authorized_keys format).
-// Entries that fail to parse are skipped (with a debug log) rather than
-// aborting the whole set, so a single malformed CA line does not discard
-// valid ones.
+// signed by any of the supplied SSH CAs (authorized_keys format). Unparseable
+// entries are skipped rather than discarding the whole set.
 func makeHostKeyCallback(ctx context.Context, sshCAs [][]byte) (ssh.HostKeyCallback, error) {
 	cas := make([]ssh.PublicKey, 0, len(sshCAs))
 	for _, raw := range sshCAs {
-		// Each entry may contain multiple authorized_keys lines.
-		for len(raw) > 0 {
+		for len(raw) > 0 { // an entry may hold multiple keys
 			pk, _, _, rest, err := ssh.ParseAuthorizedKey(raw)
 			if err != nil {
 				tflog.Debug(ctx, "skipping unparseable ssh CA entry", map[string]any{

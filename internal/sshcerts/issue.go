@@ -1,8 +1,6 @@
-// Package sshcerts wraps the Teleport API call needed to issue a short-lived
-// SSH user certificate plus the SSH host CA bundle required to verify
-// Teleport-managed SSH servers.
-//
-// This is the in-process equivalent of the SSH-cert side of `tsh login`.
+// Package sshcerts issues a short-lived SSH user certificate plus the SSH host
+// CA bundle for verifying Teleport servers: the in-process equivalent of the
+// SSH-cert side of `tsh login`.
 package sshcerts
 
 import (
@@ -24,34 +22,21 @@ import (
 
 // Request describes a single SSH certificate issuance.
 type Request struct {
-	// NodeName is the Teleport node hostname/UUID the cert should target.
-	// Required - the resulting cert is scoped to this node.
-	NodeName string
-	// SSHLogin is the OS user the cert authorizes the bearer to connect as
-	// (e.g. "root", "ec2-user").
-	SSHLogin string
-	// TTL is the certificate validity. Zero defaults to 1h.
-	TTL time.Duration
-	// RouteToCluster overrides the route_to_cluster field. Empty means
-	// "the cluster the proxy belongs to".
-	RouteToCluster string
+	NodeName       string        // target node hostname/UUID; the cert is scoped to it
+	SSHLogin       string        // OS user to connect as, e.g. "root"
+	TTL            time.Duration // zero defaults to 1h
+	RouteToCluster string        // empty => the proxy's own cluster
 }
 
 // Result is the material returned by Issue.
 type Result struct {
-	// SSHCert is the parsed Teleport-signed SSH certificate.
-	SSHCert *ssh.Certificate
-	// PrivateKey is the ECDSA P-256 private key matching the cert,
-	// exposed as a crypto.Signer. Caller owns it.
-	PrivateKey crypto.Signer
-	// SSHCAs are the PEM-encoded SSH CA public keys (in OpenSSH
-	// authorized_keys format) for verifying SSH host keys of cluster nodes.
-	SSHCAs [][]byte
+	SSHCert    *ssh.Certificate
+	PrivateKey crypto.Signer // ECDSA P-256
+	SSHCAs     [][]byte      // SSH host CAs (authorized_keys format) for host-key verification
 }
 
-// Issue generates a fresh RSA keypair, asks the Teleport auth service to
-// sign an SSH-scoped user certificate for it, and returns the cert, private
-// key, and SSH CAs.
+// Issue generates a keypair, has Teleport sign an SSH-scoped cert, and returns
+// the cert, private key, and SSH CAs.
 func Issue(ctx context.Context, c *client.Client, req Request) (*Result, error) {
 	if c == nil {
 		return nil, errors.New("teleport client is nil")
