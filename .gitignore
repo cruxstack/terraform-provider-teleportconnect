@@ -22,6 +22,9 @@ crash.*.log
 .terraformrc
 terraform.rc
 
+# Integration test artifacts (signed identity files, etc.)
+test/integration/out/
+
 # Editor / OS
 .idea/
 .vscode/

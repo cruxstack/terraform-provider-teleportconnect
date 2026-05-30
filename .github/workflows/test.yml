@@ -1,0 +1,154 @@
+name: test
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build & vet
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-ed:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: Verify go.mod is tidy
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@db582008a42febd596419635a5abc9d9815daa9c # v9.2.1
+        with:
+          version: v2.12.2
+
+  unit:
+    name: unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Acceptance/integration tests (TF_ACC) require a live Teleport cluster
+      # and run in the dedicated job below; this runs the plain unit tests with
+      # the race detector enabled (the tunnels and registry are concurrent).
+      - name: go test
+        run: go test -race -v -cover ./...
+
+  vuln:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+  acceptance:
+    name: acceptance & integration (live Teleport)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Start Teleport + Postgres
+        # Single-node Teleport (v18) plus a Postgres target. The compose file
+        # registers a db_service (appdb-postgres) and an SSH node labeled
+        # role=bastion so the data sources, db certificate, and db tunnel
+        # acceptance tests have real resources to exercise.
+        run: docker compose -f test/integration/docker-compose.yml up -d
+
+      - name: Bootstrap identity
+        # Waits for auth, creates the tc-tester role/user, and signs an
+        # identity file into test/integration/out/identity.
+        run: ./test/integration/bootstrap.sh
+
+      - name: go test (acceptance & integration)
+        env:
+          TF_ACC: "1"
+          TC_PROXY_ADDRESS: localhost:3080
+          TC_ALPN_CONN_UPGRADE: "no"
+          TC_INSECURE: "true"
+          TC_DATABASE_NAME: appdb-postgres
+          TC_DATABASE_USER: dbuser
+          TC_DATABASE_LABEL_KEY: engine
+          TC_DATABASE_LABEL_VALUE: postgres
+          TC_NODE_HOSTNAME: teleportconnect-it
+          TC_NODE_LABEL_KEY: role
+          TC_NODE_LABEL_VALUE: bastion
+        run: |
+          export TC_IDENTITY_FILE_PATH="$(pwd)/test/integration/out/identity"
+          go test -v -timeout 30m ./internal/provider/...
+
+      - name: Teleport logs on failure
+        if: failure()
+        run: docker logs teleportconnect-it || true
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f test/integration/docker-compose.yml down -v || true
