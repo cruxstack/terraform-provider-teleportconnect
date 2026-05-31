@@ -88,12 +88,12 @@ func Build(ctx context.Context, c Config) (*client.Client, error) {
 		Context:                  ctx,
 	}
 
-	// The join path issues a cluster-scoped cert; route auth through the
-	// proxy via ALPN/SNI so TLS verifies against the proxy's public cert
-	// rather than the cluster identity.
-	if creds.clusterName != "" {
-		cfg.ALPNSNIAuthDialClusterName = creds.clusterName
-		cfg.ALPNConnUpgradeRequired = client.IsALPNConnUpgradeRequired(ctx, c.ProxyAddress, c.Insecure)
+	// The join path embeds the auth ALPN route and proxy SNI in the
+	// credentials' TLS config, so the connection terminates at the proxy's
+	// public cert and routes to auth via ALPN rather than dialing the auth
+	// server directly. Only the connection-upgrade flag is needed here.
+	if creds.routeThruProxy {
+		cfg.ALPNConnUpgradeRequired = creds.connUpgrade
 	}
 
 	clt, err := client.New(ctx, cfg)
@@ -103,11 +103,12 @@ func Build(ctx context.Context, c Config) (*client.Client, error) {
 	return clt, nil
 }
 
-// credentialSet is the SDK credentials plus, for the join path, the cluster
-// name needed for ALPN-SNI auth routing.
+// credentialSet is the SDK credentials plus, for the join path, the ALPN
+// connection-upgrade flag for routing auth through the proxy.
 type credentialSet struct {
-	creds       []client.Credentials
-	clusterName string
+	creds          []client.Credentials
+	routeThruProxy bool
+	connUpgrade    bool
 }
 
 // credentials maps a Config to the Teleport SDK's credentials.

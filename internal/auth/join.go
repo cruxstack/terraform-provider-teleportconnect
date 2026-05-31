@@ -16,7 +16,9 @@ import (
 
 	tpclient "github.com/gravitational/teleport/api/client"
 	"github.com/gravitational/teleport/api/client/proto"
+	"github.com/gravitational/teleport/api/constants"
 	"github.com/gravitational/teleport/api/types"
+	"github.com/gravitational/teleport/api/utils"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -85,22 +87,46 @@ func (c Config) credentialsFromJoin(ctx context.Context) (credentialSet, error) 
 		return credentialSet{}, fmt.Errorf("joining cluster via %s join method: %w (check the join token name, that the token's allow rules match this workload, and that the audience claim is %q)", c.JoinMethod, err, audience)
 	}
 
-	tlsConfig, err := tlsConfigFromCerts(certs, keyPEM)
-	if err != nil {
-		return credentialSet{}, err
-	}
-	// Verify against the proxy's public cert, not the cluster identity.
-	tlsConfig.ServerName = hostOnly(c.ProxyAddress)
-
 	clusterName, err := clusterNameFromCert(certs.TLS)
 	if err != nil {
 		return credentialSet{}, err
 	}
 
+	tlsConfig, err := tlsConfigFromCerts(certs, keyPEM)
+	if err != nil {
+		return credentialSet{}, err
+	}
+	applyProxyAuthRouting(tlsConfig, hostOnly(c.ProxyAddress), clusterName, certs.TLSCACerts, c.Insecure)
+
 	return credentialSet{
-		creds:       []tpclient.Credentials{tpclient.LoadTLS(tlsConfig)},
-		clusterName: clusterName,
+		creds:          []tpclient.Credentials{tpclient.LoadTLS(tlsConfig)},
+		connUpgrade:    tpclient.IsALPNConnUpgradeRequired(ctx, c.ProxyAddress, c.Insecure),
+		routeThruProxy: true,
 	}, nil
+}
+
+// applyProxyAuthRouting configures a join credential's TLS config to route auth
+// through the proxy: the proxy host as SNI (verifying its public cert) plus the
+// auth ALPN protocol carrying the cluster route, so the connection terminates
+// at the proxy instead of dialing the auth server directly. Mirrors
+// dialJoinService and tunnel/db.go.
+func applyProxyAuthRouting(tlsConfig *tls.Config, proxyHost, clusterName string, caCerts [][]byte, insecure bool) {
+	tlsConfig.ServerName = proxyHost
+	tlsConfig.NextProtos = []string{constants.ALPNSNIAuthProtocol + utils.EncodeClusterName(clusterName)}
+	if insecure {
+		tlsConfig.InsecureSkipVerify = true
+		return
+	}
+	// Trust the public proxy cert (system roots) alongside the cluster CAs the
+	// proxy presents during ALPN connection upgrade.
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	for _, ca := range caCerts {
+		pool.AppendCertsFromPEM(ca)
+	}
+	tlsConfig.RootCAs = pool
 }
 
 // clusterNameFromCert reads the cluster name from a Teleport-issued TLS cert,
