@@ -100,7 +100,7 @@ func (c Config) credentialsFromJoin(ctx context.Context) (credentialSet, error) 
 
 	return credentialSet{
 		creds:          []tpclient.Credentials{tpclient.LoadTLS(tlsConfig)},
-		connUpgrade:    tpclient.IsALPNConnUpgradeRequired(ctx, c.ProxyAddress, c.Insecure),
+		connUpgrade:    c.resolveALPNUpgrade(ctx),
 		routeThruProxy: true,
 	}, nil
 }
@@ -166,8 +166,7 @@ func (c Config) dialJoinService(ctx context.Context) (*tpclient.JoinServiceClien
 		tlsConfig.RootCAs = pool
 	}
 
-	// Probe for the HTTPS upgrade L7-LB-fronted proxies need before routing.
-	upgradeRequired := tpclient.IsALPNConnUpgradeRequired(ctx, c.ProxyAddress, c.Insecure)
+	upgradeRequired := c.resolveALPNUpgrade(ctx)
 	dialer := tpclient.NewALPNDialer(tpclient.ALPNDialerConfig{
 		DialTimeout:             15 * time.Second,
 		KeepAlivePeriod:         30 * time.Second,

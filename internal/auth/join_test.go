@@ -101,6 +101,16 @@ func TestApplyProxyAuthRoutingInsecure(t *testing.T) {
 	}
 }
 
+func TestResolveALPNUpgrade(t *testing.T) {
+	// yes/no are honored without consulting the (network) probe.
+	if got := (Config{ALPNUpgrade: ALPNUpgradeYes}).resolveALPNUpgrade(context.Background()); !got {
+		t.Fatal("ALPNUpgradeYes should resolve to true")
+	}
+	if got := (Config{ALPNUpgrade: ALPNUpgradeNo}).resolveALPNUpgrade(context.Background()); got {
+		t.Fatal("ALPNUpgradeNo should resolve to false")
+	}
+}
+
 // issueTestCert mints a leaf cert signed by a CA whose Organization is
 // clusterName, mirroring how Teleport encodes the cluster in issued certs.
 func issueTestCert(t *testing.T, clusterName string) []byte {

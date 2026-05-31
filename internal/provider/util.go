@@ -6,6 +6,7 @@ import (
 
 	"github.com/gravitational/teleport/api/defaults"
 
+	"github.com/cruxstack/terraform-provider-teleportconnect/internal/auth"
 	"github.com/cruxstack/terraform-provider-teleportconnect/internal/tunnel"
 )
 
@@ -19,6 +20,19 @@ func tunnelUpgradeMode(m ALPNConnUpgradeMode) tunnel.ALPNUpgradeMode {
 		return tunnel.ALPNUpgradeNo
 	default:
 		return tunnel.ALPNUpgradeAuto
+	}
+}
+
+// authUpgradeMode translates the provider-level ALPN upgrade mode into the
+// auth package's mode enum.
+func authUpgradeMode(m ALPNConnUpgradeMode) auth.ALPNUpgradeMode {
+	switch m {
+	case ALPNYes:
+		return auth.ALPNUpgradeYes
+	case ALPNNo:
+		return auth.ALPNUpgradeNo
+	default:
+		return auth.ALPNUpgradeAuto
 	}
 }
 
