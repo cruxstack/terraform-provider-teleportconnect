@@ -8,6 +8,18 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- Delegated join now honors the provider's `alpn_conn_upgrade` setting for the
+  join and post-join auth dials. Previously these paths always used the
+  `IsALPNConnUpgradeRequired` probe, which is unreliable behind some L7 load
+  balancers (e.g. AWS NLB + PrivateLink): with `alpn_conn_upgrade = "yes"` the
+  probe could still return false, the HTTPS upgrade was skipped, and the client
+  fell back to dialing the auth server directly and failed against its internal
+  certificate. The setting now applies to the join/auth path the same way it
+  already applies to tunnels (`yes`/`no`/`auto`).
+  ([#5](https://github.com/cruxstack/terraform-provider-teleportconnect/issues/5))
+
 ## [0.2.2] - 2026-05-31
 
 ### Fixed

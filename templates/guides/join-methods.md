@@ -171,9 +171,10 @@ handled (no in-process renewal); split very long runs or raise the token TTL.
   `permissions: id-token: write` to the job.
 - **GitLab: no token found** — declare the `id_tokens` block and, if it is not
   named `TELEPORT_ID_TOKEN`, set `TELEPORT_GITLAB_ID_TOKEN_ENV`.
-- **`certificate is valid for <proxy>, not <cluster>`** or **`... not
-  <proxy>` (auth server cert)** — the post-join client must route through the
-  proxy. Fixed in v0.2.2+; upgrade the provider if you hit either on a
-  proxy-fronted cluster.
+- **`certificate is valid for ... not <proxy>` (auth server cert)** — the
+  post-join client reached the auth server directly instead of routing through
+  the proxy. On proxies behind an L7 load balancer (e.g. AWS NLB + PrivateLink)
+  the upgrade probe is unreliable, so set `alpn_conn_upgrade = "yes"` on the
+  provider; the join/auth dials honor it as of v0.2.3.
 - Run with `TF_LOG=DEBUG` to see the join method and audience the provider
   used.

@@ -13,6 +13,16 @@ import (
 	"github.com/gravitational/teleport/api/client"
 )
 
+// ALPNUpgradeMode selects the ALPN HTTPS connection-upgrade behavior for the
+// join/auth dials, mirroring the provider's alpn_conn_upgrade setting.
+type ALPNUpgradeMode int
+
+const (
+	ALPNUpgradeAuto ALPNUpgradeMode = iota // probe via IsALPNConnUpgradeRequired
+	ALPNUpgradeYes                         // force upgrade (L7 LB fronting the proxy)
+	ALPNUpgradeNo                          // direct TLS routing
+)
+
 // Config is the resolved authentication configuration. Validate enforces that
 // exactly one auth mode is set.
 type Config struct {
@@ -30,7 +40,22 @@ type Config struct {
 	JoinToken    string
 	JoinAudience string // expected aud claim; empty defaults to the proxy host
 
-	Insecure bool // disables proxy TLS verification; dev clusters only
+	ALPNUpgrade ALPNUpgradeMode // applies to the join/auth dials
+	Insecure    bool            // disables proxy TLS verification; dev clusters only
+}
+
+// resolveALPNUpgrade decides whether the join/auth dials perform the HTTPS
+// connection upgrade: honor an explicit yes/no, else fall back to the probe
+// (which is unreliable behind some L7 LBs, hence the override).
+func (c Config) resolveALPNUpgrade(ctx context.Context) bool {
+	switch c.ALPNUpgrade {
+	case ALPNUpgradeYes:
+		return true
+	case ALPNUpgradeNo:
+		return false
+	default:
+		return client.IsALPNConnUpgradeRequired(ctx, c.ProxyAddress, c.Insecure)
+	}
 }
 
 // Validate ensures the configuration has the minimum required fields and

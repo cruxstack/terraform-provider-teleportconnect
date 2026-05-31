@@ -183,6 +183,7 @@ func (p *teleportconnectProvider) Configure(ctx context.Context, req provider.Co
 		JoinMethod:       cfg.JoinMethod.ValueString(),
 		JoinToken:        cfg.JoinToken.ValueString(),
 		JoinAudience:     cfg.JoinAudience.ValueString(),
+		ALPNUpgrade:      authUpgradeMode(upgradeMode),
 		Insecure:         cfg.Insecure.ValueBool(),
 	}
 
