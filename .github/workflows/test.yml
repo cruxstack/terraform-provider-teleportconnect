@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build:
-    name: build & vet
+    name: build
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -49,7 +49,7 @@ jobs:
           git diff --exit-code -- go.mod go.sum
 
   lint:
-    name: golangci-lint
+    name: lint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -67,7 +67,7 @@ jobs:
           version: v2.12.2
 
   unit:
-    name: unit tests
+    name: test-unit
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -86,7 +86,7 @@ jobs:
         run: go test -race -v -cover ./...
 
   vuln:
-    name: govulncheck
+    name: test-security
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -104,7 +104,7 @@ jobs:
           govulncheck ./...
 
   acceptance:
-    name: acceptance & integration (live Teleport)
+    name: test-acceptance
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
