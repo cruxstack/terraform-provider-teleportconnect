@@ -8,6 +8,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-05-31
+
 ### Fixed
 
 - Delegated join (`join_method` + `join_token`) now routes the post-join API
@@ -92,4 +94,5 @@ Initial public release.
 
 [0.1.0]: https://github.com/cruxstack/terraform-provider-teleportconnect/releases/tag/v0.1.0
 [0.2.0]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.1.0...v0.2.0
-[unreleased]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.2.0...HEAD
+[0.2.1]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.2.0...v0.2.1
+[unreleased]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.2.1...HEAD
