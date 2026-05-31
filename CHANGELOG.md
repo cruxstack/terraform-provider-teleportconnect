@@ -8,6 +8,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-05-31
+
 ### Fixed
 
 - Delegated join now honors the provider's `alpn_conn_upgrade` setting for the
@@ -122,4 +124,5 @@ Initial public release.
 [0.2.0]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.1.0...v0.2.0
 [0.2.1]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.2.1...v0.2.2
-[unreleased]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.2.2...HEAD
+[0.2.3]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.2.2...v0.2.3
+[unreleased]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.2.3...HEAD
