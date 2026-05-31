@@ -36,9 +36,9 @@ const joinResultTTL = time.Hour
 // credentialsFromJoin performs a delegated (OIDC-family) join and returns API
 // credentials from the issued certs: the in-process equivalent of a one-shot
 // tbot run, built only against the Apache-2.0 api/ module.
-func (c Config) credentialsFromJoin(ctx context.Context) ([]tpclient.Credentials, error) {
+func (c Config) credentialsFromJoin(ctx context.Context) (credentialSet, error) {
 	if !idtoken.IsSupported(c.JoinMethod) {
-		return nil, fmt.Errorf("join_method %q is not supported; supported methods: %s", c.JoinMethod, strings.Join(idtoken.Supported(), ", "))
+		return credentialSet{}, fmt.Errorf("join_method %q is not supported; supported methods: %s", c.JoinMethod, strings.Join(idtoken.Supported(), ", "))
 	}
 
 	audience := c.JoinAudience
@@ -48,29 +48,29 @@ func (c Config) credentialsFromJoin(ctx context.Context) ([]tpclient.Credentials
 
 	idToken, err := idtoken.Fetch(ctx, c.JoinMethod, audience)
 	if err != nil {
-		return nil, err
+		return credentialSet{}, err
 	}
 
 	// The cluster signs the public half; the private half backs the creds.
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return nil, fmt.Errorf("generating private key: %w", err)
+		return credentialSet{}, fmt.Errorf("generating private key: %w", err)
 	}
 	pubDER, err := x509.MarshalPKIXPublicKey(&priv.PublicKey)
 	if err != nil {
-		return nil, fmt.Errorf("marshaling public key: %w", err)
+		return credentialSet{}, fmt.Errorf("marshaling public key: %w", err)
 	}
 	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})
 
 	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
 	if err != nil {
-		return nil, fmt.Errorf("marshaling private key: %w", err)
+		return credentialSet{}, fmt.Errorf("marshaling private key: %w", err)
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 
 	joinClient, closeConn, err := c.dialJoinService(ctx)
 	if err != nil {
-		return nil, err
+		return credentialSet{}, err
 	}
 	defer closeConn()
 
@@ -82,14 +82,42 @@ func (c Config) credentialsFromJoin(ctx context.Context) ([]tpclient.Credentials
 		Expires:      ptrTime(time.Now().Add(joinResultTTL)),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("joining cluster via %s join method: %w (check the join token name, that the token's allow rules match this workload, and that the audience claim is %q)", c.JoinMethod, err, audience)
+		return credentialSet{}, fmt.Errorf("joining cluster via %s join method: %w (check the join token name, that the token's allow rules match this workload, and that the audience claim is %q)", c.JoinMethod, err, audience)
 	}
 
 	tlsConfig, err := tlsConfigFromCerts(certs, keyPEM)
 	if err != nil {
-		return nil, err
+		return credentialSet{}, err
 	}
-	return []tpclient.Credentials{tpclient.LoadTLS(tlsConfig)}, nil
+	// Verify against the proxy's public cert, not the cluster identity.
+	tlsConfig.ServerName = hostOnly(c.ProxyAddress)
+
+	clusterName, err := clusterNameFromCert(certs.TLS)
+	if err != nil {
+		return credentialSet{}, err
+	}
+
+	return credentialSet{
+		creds:       []tpclient.Credentials{tpclient.LoadTLS(tlsConfig)},
+		clusterName: clusterName,
+	}, nil
+}
+
+// clusterNameFromCert reads the cluster name from a Teleport-issued TLS cert,
+// where it is the issuing CA's Organization.
+func clusterNameFromCert(certPEM []byte) (string, error) {
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		return "", errors.New("join service returned an unparseable TLS certificate")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return "", fmt.Errorf("parsing issued certificate: %w", err)
+	}
+	if len(cert.Issuer.Organization) == 0 || cert.Issuer.Organization[0] == "" {
+		return "", errors.New("issued certificate has no cluster name in its issuer")
+	}
+	return cert.Issuer.Organization[0], nil
 }
 
 // dialJoinService opens an unauthenticated gRPC connection to the proxy's
