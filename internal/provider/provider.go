@@ -69,16 +69,18 @@ type ProviderData struct {
 // providerModel mirrors the HCL schema. types.* fields distinguish unset from
 // empty when validating mutually exclusive auth modes.
 type providerModel struct {
-	ProxyAddress     types.String `tfsdk:"proxy_address"`
-	Cluster          types.String `tfsdk:"cluster"`
-	IdentityFilePath types.String `tfsdk:"identity_file_path"`
-	IdentityFileData types.String `tfsdk:"identity_file_data"`
-	UseLocalProfile  types.Bool   `tfsdk:"use_local_profile"`
-	JoinMethod       types.String `tfsdk:"join_method"`
-	JoinToken        types.String `tfsdk:"join_token"`
-	JoinAudience     types.String `tfsdk:"join_audience"`
-	Insecure         types.Bool   `tfsdk:"insecure"`
-	ALPNConnUpgrade  types.String `tfsdk:"alpn_conn_upgrade"`
+	ProxyAddress        types.String `tfsdk:"proxy_address"`
+	Cluster             types.String `tfsdk:"cluster"`
+	IdentityFilePath    types.String `tfsdk:"identity_file_path"`
+	IdentityFileData    types.String `tfsdk:"identity_file_data"`
+	UseLocalProfile     types.Bool   `tfsdk:"use_local_profile"`
+	JoinMethod          types.String `tfsdk:"join_method"`
+	JoinToken           types.String `tfsdk:"join_token"`
+	JoinAudience        types.String `tfsdk:"join_audience"`
+	Insecure            types.Bool   `tfsdk:"insecure"`
+	ALPNConnUpgrade     types.String `tfsdk:"alpn_conn_upgrade"`
+	JoinALPNConnUpgrade types.String `tfsdk:"join_alpn_conn_upgrade"`
+	AuthALPNConnUpgrade types.String `tfsdk:"auth_alpn_conn_upgrade"`
 }
 
 func (p *teleportconnectProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -131,6 +133,14 @@ func (p *teleportconnectProvider) Schema(_ context.Context, _ provider.SchemaReq
 				Optional:    true,
 				Description: "Whether to perform an HTTPS connection upgrade for ALPN tunnels. Set to 'yes' when the Teleport proxy sits behind an L7 load balancer (AWS ALB, etc.) that terminates TLS with a public cert. 'no' to force direct TLS routing. 'auto' (default) probes the proxy and decides; the probe is unreliable for some LBs - prefer 'yes' if you know your proxy is fronted by one.",
 			},
+			"join_alpn_conn_upgrade": schema.StringAttribute{
+				Optional:    true,
+				Description: "HTTPS connection upgrade behavior for the delegated-join handshake (the unauthenticated dial to the proxy's JoinService), independent of alpn_conn_upgrade (tunnels) and auth_alpn_conn_upgrade (post-join). Defaults to 'auto'. Set to 'no' when the proxy is behind an L4 load balancer with a private endpoint, where forcing the upgrade makes the join dial verify the proxy's resolved private IP and fail with a no-IP-SANs error.",
+			},
+			"auth_alpn_conn_upgrade": schema.StringAttribute{
+				Optional:    true,
+				Description: "HTTPS connection upgrade behavior for the post-join auth client (the authenticated API connection made after a successful join), independent of alpn_conn_upgrade (tunnels) and join_alpn_conn_upgrade. Defaults to 'auto'. Set to 'yes' when the auth connection must be ALPN-routed through the proxy (otherwise it can terminate against the internal auth certificate). The join handshake and the post-join auth dial can require opposite values on some topologies.",
+			},
 		},
 	}
 }
@@ -174,6 +184,29 @@ func (p *teleportconnectProvider) Configure(ctx context.Context, req provider.Co
 		return
 	}
 
+	// The join handshake and post-join auth dials each have their own upgrade
+	// knob, independent of the tunnel's and of each other: some topologies
+	// (L4 LB + private endpoint) need opposite values for the two dials.
+	joinUpgradeMode, err := parseALPNUpgradeMode(cfg.JoinALPNConnUpgrade.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("join_alpn_conn_upgrade"),
+			"Invalid join_alpn_conn_upgrade value",
+			err.Error(),
+		)
+		return
+	}
+
+	authUpgradeModeVal, err := parseALPNUpgradeMode(cfg.AuthALPNConnUpgrade.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("auth_alpn_conn_upgrade"),
+			"Invalid auth_alpn_conn_upgrade value",
+			err.Error(),
+		)
+		return
+	}
+
 	authCfg := auth.Config{
 		ProxyAddress:     proxyAddress,
 		Cluster:          cfg.Cluster.ValueString(),
@@ -183,7 +216,8 @@ func (p *teleportconnectProvider) Configure(ctx context.Context, req provider.Co
 		JoinMethod:       cfg.JoinMethod.ValueString(),
 		JoinToken:        cfg.JoinToken.ValueString(),
 		JoinAudience:     cfg.JoinAudience.ValueString(),
-		ALPNUpgrade:      authUpgradeMode(upgradeMode),
+		JoinALPNUpgrade:  authUpgradeMode(joinUpgradeMode),
+		AuthALPNUpgrade:  authUpgradeMode(authUpgradeModeVal),
 		Insecure:         cfg.Insecure.ValueBool(),
 	}
 

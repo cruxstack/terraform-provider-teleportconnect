@@ -2,20 +2,18 @@ package auth
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/gravitational/teleport/api/constants"
-	"github.com/gravitational/teleport/api/utils"
+	"golang.org/x/crypto/ssh"
 )
 
 func TestHostOnly(t *testing.T) {
@@ -70,52 +68,71 @@ func TestClusterNameFromCertErrors(t *testing.T) {
 	}
 }
 
-func TestApplyProxyAuthRouting(t *testing.T) {
-	const cluster = "teleport.cluster.local"
-	cfg := &tls.Config{}
-	applyProxyAuthRouting(cfg, "proxy.example.com", cluster, nil, false)
-
-	if cfg.ServerName != "proxy.example.com" {
-		t.Fatalf("ServerName = %q, want proxy host", cfg.ServerName)
-	}
-	want := constants.ALPNSNIAuthProtocol + utils.EncodeClusterName(cluster)
-	if len(cfg.NextProtos) != 1 || cfg.NextProtos[0] != want {
-		t.Fatalf("NextProtos = %v, want [%q]", cfg.NextProtos, want)
-	}
-	if !strings.HasPrefix(cfg.NextProtos[0], "teleport-auth@") {
-		t.Fatalf("auth ALPN protocol missing: %q", cfg.NextProtos[0])
-	}
-	if cfg.InsecureSkipVerify {
-		t.Fatal("InsecureSkipVerify should be false when insecure=false")
-	}
-	if cfg.RootCAs == nil {
-		t.Fatal("RootCAs should be set when insecure=false")
-	}
-}
-
-func TestApplyProxyAuthRoutingInsecure(t *testing.T) {
-	cfg := &tls.Config{}
-	applyProxyAuthRouting(cfg, "proxy.example.com", "c", nil, true)
-	if !cfg.InsecureSkipVerify {
-		t.Fatal("InsecureSkipVerify should be true when insecure=true")
-	}
-}
-
 func TestResolveALPNUpgrade(t *testing.T) {
 	// yes/no are honored without consulting the (network) probe.
-	if got := (Config{ALPNUpgrade: ALPNUpgradeYes}).resolveALPNUpgrade(context.Background()); !got {
+	c := Config{}
+	if got := c.resolveALPNUpgrade(context.Background(), ALPNUpgradeYes); !got {
 		t.Fatal("ALPNUpgradeYes should resolve to true")
 	}
-	if got := (Config{ALPNUpgrade: ALPNUpgradeNo}).resolveALPNUpgrade(context.Background()); got {
+	if got := c.resolveALPNUpgrade(context.Background(), ALPNUpgradeNo); got {
 		t.Fatal("ALPNUpgradeNo should resolve to false")
 	}
 }
 
-func TestProxyAuthDialerNonNil(t *testing.T) {
-	c := Config{ProxyAddress: "proxy.example.com:443", ALPNUpgrade: ALPNUpgradeNo}
-	if d := c.proxyAuthDialer(context.Background()); d == nil {
-		t.Fatal("proxyAuthDialer returned nil")
+func TestSSHCertFromBytes(t *testing.T) {
+	key, certBytes := issueTestSSHCert(t)
+
+	cert, err := sshCertFromBytes(certBytes)
+	if err != nil {
+		t.Fatalf("sshCertFromBytes: %v", err)
 	}
+	if _, err := sshClientSigner(cert, key); err != nil {
+		t.Fatalf("sshClientSigner: %v", err)
+	}
+	if _, err := sshCertFromBytes([]byte("not a key")); err == nil {
+		t.Fatal("expected error for invalid ssh cert bytes")
+	}
+}
+
+func TestHostKeyCallback(t *testing.T) {
+	_, certBytes := issueTestSSHCert(t)
+	if _, err := hostKeyCallback([][]byte{certBytes}); err != nil {
+		t.Fatalf("hostKeyCallback: %v", err)
+	}
+	if _, err := hostKeyCallback(nil); err == nil {
+		t.Fatal("expected error when no SSH CAs provided")
+	}
+}
+
+// issueTestSSHCert returns an ECDSA private key and a marshaled SSH certificate
+// (over that key) signed by a throwaway CA, for exercising the SSH helpers.
+func issueTestSSHCert(t *testing.T) (crypto.Signer, []byte) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := ssh.NewPublicKey(&key.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caSigner, err := ssh.NewSignerFromKey(caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert := &ssh.Certificate{
+		Key:         pub,
+		CertType:    ssh.UserCert,
+		ValidBefore: ssh.CertTimeInfinity,
+	}
+	if err := cert.SignCert(rand.Reader, caSigner); err != nil {
+		t.Fatal(err)
+	}
+	return key, ssh.MarshalAuthorizedKey(cert)
 }
 
 // issueTestCert mints a leaf cert signed by a CA whose Organization is

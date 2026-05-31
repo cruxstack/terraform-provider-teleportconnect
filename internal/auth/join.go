@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -16,9 +17,10 @@ import (
 
 	tpclient "github.com/gravitational/teleport/api/client"
 	"github.com/gravitational/teleport/api/client/proto"
-	"github.com/gravitational/teleport/api/constants"
+	tpproxy "github.com/gravitational/teleport/api/client/proxy"
+	"github.com/gravitational/teleport/api/client/webclient"
 	"github.com/gravitational/teleport/api/types"
-	"github.com/gravitational/teleport/api/utils"
+	"golang.org/x/crypto/ssh"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -53,7 +55,8 @@ func (c Config) credentialsFromJoin(ctx context.Context) (credentialSet, error) 
 		return credentialSet{}, err
 	}
 
-	// The cluster signs the public half; the private half backs the creds.
+	// Fresh ECDSA P-256 keypair; the cluster signs the public half (as both
+	// TLS and SSH), the private half backs the issued certs.
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return credentialSet{}, fmt.Errorf("generating private key: %w", err)
@@ -70,6 +73,12 @@ func (c Config) credentialsFromJoin(ctx context.Context) (credentialSet, error) 
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 
+	sshSigner, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		return credentialSet{}, fmt.Errorf("building ssh signer: %w", err)
+	}
+	sshPub := ssh.MarshalAuthorizedKey(sshSigner.PublicKey())
+
 	joinClient, closeConn, err := c.dialJoinService(ctx)
 	if err != nil {
 		return credentialSet{}, err
@@ -80,6 +89,7 @@ func (c Config) credentialsFromJoin(ctx context.Context) (credentialSet, error) 
 		Token:        c.JoinToken,
 		Role:         types.RoleBot,
 		PublicTLSKey: pubPEM,
+		PublicSSHKey: sshPub,
 		IDToken:      idToken,
 		Expires:      ptrTime(time.Now().Add(joinResultTTL)),
 	})
@@ -92,56 +102,141 @@ func (c Config) credentialsFromJoin(ctx context.Context) (credentialSet, error) 
 		return credentialSet{}, err
 	}
 
-	tlsConfig, err := tlsConfigFromCerts(certs, keyPEM)
+	cfg, err := c.proxyClientConfig(ctx, certs, keyPEM, priv, clusterName)
 	if err != nil {
 		return credentialSet{}, err
 	}
-	applyProxyAuthRouting(tlsConfig, hostOnly(c.ProxyAddress), clusterName, certs.TLSCACerts, c.Insecure)
-
-	return credentialSet{
-		creds:  []tpclient.Credentials{tpclient.LoadTLS(tlsConfig)},
-		dialer: c.proxyAuthDialer(ctx),
-	}, nil
+	return credentialSet{clientConfig: cfg}, nil
 }
 
-// proxyAuthDialer returns a dialer pinned to the proxy address for the
-// post-join auth client. Pinning an explicit dialer makes the SDK route auth
-// through the proxy and skip its auth-server fallback, which is unreachable on
-// proxy-only topologies. It returns a raw connection (optionally after the
-// ALPN HTTPS upgrade); the gRPC layer then performs the single TLS handshake
-// using the auth-routing credentials.
-func (c Config) proxyAuthDialer(ctx context.Context) tpclient.ContextDialer {
-	base := tpclient.NewDialer(ctx, 30*time.Second, 20*time.Second,
-		tpclient.WithInsecureSkipVerify(c.Insecure),
-		tpclient.WithALPNConnUpgrade(c.resolveALPNUpgrade(ctx)),
-	)
-	return tpclient.ContextDialerFunc(func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return base.DialContext(ctx, "tcp", c.ProxyAddress)
-	})
-}
-
-// applyProxyAuthRouting configures a join credential's TLS config to route auth
-// through the proxy: the proxy host as SNI (verifying its public cert) plus the
-// auth ALPN protocol carrying the cluster route, so the connection terminates
-// at the proxy instead of dialing the auth server directly. Mirrors
-// dialJoinService and tunnel/db.go.
-func applyProxyAuthRouting(tlsConfig *tls.Config, proxyHost, clusterName string, caCerts [][]byte, insecure bool) {
-	tlsConfig.ServerName = proxyHost
-	tlsConfig.NextProtos = []string{constants.ALPNSNIAuthProtocol + utils.EncodeClusterName(clusterName)}
-	if insecure {
+// proxyClientConfig builds the post-join auth client config the same way
+// tsh/tbot do: it constructs an api/client/proxy.Client against the proxy
+// (discovering TLS routing and connection-upgrade requirements) and returns
+// its ClientConfig, so auth is reached through the proxy rather than dialed
+// directly.
+func (c Config) proxyClientConfig(ctx context.Context, certs *proto.Certs, keyPEM []byte, signer crypto.Signer, clusterName string) (*tpclient.Config, error) {
+	tlsConfig, err := tlsConfigFromCerts(certs, keyPEM)
+	if err != nil {
+		return nil, err
+	}
+	if c.Insecure {
 		tlsConfig.InsecureSkipVerify = true
-		return
 	}
-	// Trust the public proxy cert (system roots) alongside the cluster CAs the
-	// proxy presents during ALPN connection upgrade.
-	pool, err := x509.SystemCertPool()
-	if err != nil || pool == nil {
-		pool = x509.NewCertPool()
+
+	sshCert, err := sshCertFromBytes(certs.SSH)
+	if err != nil {
+		return nil, err
 	}
-	for _, ca := range caCerts {
-		pool.AppendCertsFromPEM(ca)
+	certSigner, err := sshClientSigner(sshCert, signer)
+	if err != nil {
+		return nil, err
 	}
-	tlsConfig.RootCAs = pool
+	hostKeys, err := hostKeyCallback(certs.SSHCACerts)
+	if err != nil {
+		return nil, err
+	}
+	sshConfig := &ssh.ClientConfig{
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(certSigner)},
+		HostKeyCallback: hostKeys,
+		Timeout:         20 * time.Second,
+	}
+
+	tlsRouting, err := c.proxyTLSRoutingEnabled(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	pc, err := tpproxy.NewClient(ctx, tpproxy.ClientConfig{
+		ProxyAddress:            c.ProxyAddress,
+		TLSRoutingEnabled:       tlsRouting,
+		TLSConfigFunc:           func(string) (*tls.Config, error) { return tlsConfig.Clone(), nil },
+		SSHConfig:               sshConfig,
+		ALPNConnUpgradeRequired: c.resolveALPNUpgrade(ctx, c.AuthALPNUpgrade),
+		InsecureSkipVerify:      c.Insecure,
+		DialTimeout:             20 * time.Second,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("creating proxy client: %w", err)
+	}
+
+	cfg, err := pc.ClientConfig(ctx, clusterName)
+	if err != nil {
+		return nil, fmt.Errorf("building proxy auth client config: %w", err)
+	}
+	cfg.Context = ctx
+	cfg.InsecureAddressDiscovery = c.Insecure
+	return &cfg, nil
+}
+
+// proxyTLSRoutingEnabled queries the proxy's /webapi/find (same call tsh makes)
+// to learn whether the cluster uses TLS routing.
+func (c Config) proxyTLSRoutingEnabled(ctx context.Context) (bool, error) {
+	resp, err := webclient.Find(&webclient.Config{
+		Context:   ctx,
+		ProxyAddr: c.ProxyAddress,
+		Insecure:  c.Insecure,
+	})
+	if err != nil {
+		return false, fmt.Errorf("querying proxy settings at %s: %w", c.ProxyAddress, err)
+	}
+	return resp.Proxy.TLSRoutingEnabled, nil
+}
+
+// sshCertFromBytes parses an SSH certificate in authorized_keys format.
+func sshCertFromBytes(sshCert []byte) (*ssh.Certificate, error) {
+	pub, _, _, _, err := ssh.ParseAuthorizedKey(sshCert)
+	if err != nil {
+		return nil, fmt.Errorf("parsing issued ssh certificate: %w", err)
+	}
+	cert, ok := pub.(*ssh.Certificate)
+	if !ok {
+		return nil, errors.New("join service returned a non-certificate ssh key")
+	}
+	return cert, nil
+}
+
+// sshClientSigner combines the issued SSH certificate with the local private
+// key into a signer usable for SSH client auth.
+func sshClientSigner(cert *ssh.Certificate, key crypto.Signer) (ssh.Signer, error) {
+	signer, err := ssh.NewSignerFromKey(key)
+	if err != nil {
+		return nil, fmt.Errorf("building ssh signer: %w", err)
+	}
+	certSigner, err := ssh.NewCertSigner(cert, signer)
+	if err != nil {
+		return nil, fmt.Errorf("building ssh cert signer: %w", err)
+	}
+	return certSigner, nil
+}
+
+// hostKeyCallback trusts SSH host keys signed by any of the supplied SSH CAs
+// (authorized_keys format). Unparseable entries are skipped.
+func hostKeyCallback(sshCAs [][]byte) (ssh.HostKeyCallback, error) {
+	cas := make([]ssh.PublicKey, 0, len(sshCAs))
+	for _, raw := range sshCAs {
+		for len(raw) > 0 {
+			pk, _, _, rest, err := ssh.ParseAuthorizedKey(raw)
+			if err != nil {
+				break
+			}
+			cas = append(cas, pk)
+			raw = rest
+		}
+	}
+	if len(cas) == 0 {
+		return nil, errors.New("join service returned no SSH CAs")
+	}
+	checker := &ssh.CertChecker{
+		IsHostAuthority: func(auth ssh.PublicKey, _ string) bool {
+			for _, ca := range cas {
+				if string(auth.Marshal()) == string(ca.Marshal()) {
+					return true
+				}
+			}
+			return false
+		},
+	}
+	return checker.CheckHostKey, nil
 }
 
 // clusterNameFromCert reads the cluster name from a Teleport-issued TLS cert,
@@ -181,7 +276,7 @@ func (c Config) dialJoinService(ctx context.Context) (*tpclient.JoinServiceClien
 		tlsConfig.RootCAs = pool
 	}
 
-	upgradeRequired := c.resolveALPNUpgrade(ctx)
+	upgradeRequired := c.resolveALPNUpgrade(ctx, c.JoinALPNUpgrade)
 	dialer := tpclient.NewALPNDialer(tpclient.ALPNDialerConfig{
 		DialTimeout:             15 * time.Second,
 		KeepAlivePeriod:         30 * time.Second,

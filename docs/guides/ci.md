@@ -283,6 +283,20 @@ terminates TLS with its own certificate, set `alpn_conn_upgrade = "yes"` on the
 provider. The default `auto` probes the proxy but is unreliable for some load
 balancers. See the [ALPN connection upgrade guide](./alpn-conn-upgrade.md).
 
+There are three independent connection-upgrade knobs because some topologies
+need different values for each dial:
+
+- `alpn_conn_upgrade` — the db/SSH tunnels.
+- `join_alpn_conn_upgrade` — the delegated-join handshake.
+- `auth_alpn_conn_upgrade` — the post-join auth client.
+
+All default to `auto`. On an L4 load balancer with a private endpoint, the join
+handshake must not upgrade (it would verify the proxy's resolved private IP and
+fail), while the post-join auth client must route through the proxy. A working
+combination there is `join_alpn_conn_upgrade = "no"` and
+`auth_alpn_conn_upgrade = "yes"` (plus `alpn_conn_upgrade = "yes"` if you also
+use db tunnels).
+
 ## RBAC
 
 The CI identity should have a narrowly scoped role. See the

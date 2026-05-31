@@ -8,6 +8,42 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- Delegated-join (bot) identities now issue database and SSH certificates that
+  carry the bot's actual access roles, so the database/SSH agent authorizes the
+  connection. A bot authenticates as `bot-<name>` whose only role is a wrapper
+  that grants access via role impersonation; issuing certs keyed on the bot user
+  alone produced certificates without the access roles and the agent denied the
+  connection (`access to db denied`). The provider now discovers the wrapper
+  role's impersonated roles and requests them (`RoleRequests` +
+  `UseRoleRequests`), matching how `tsh`/`tbot` issue resource certs. Normal
+  user identities are unaffected.
+  ([#5](https://github.com/cruxstack/terraform-provider-teleportconnect/issues/5))
+
+### Changed
+
+- The delegated-join post-join auth client now connects through the proxy using
+  the same path as `tsh`/`tbot` (`api/client/proxy.Client.ClientConfig`),
+  instead of a hand-built dialer. The join now also requests an SSH certificate
+  so the proxy client can be constructed. This makes the provider's behavior on
+  proxy-fronted clusters (TLS routing, L4/L7 load balancers, PrivateLink) match
+  the official Teleport clients.
+  ([#5](https://github.com/cruxstack/terraform-provider-teleportconnect/issues/5))
+
+### Added
+
+- `join_alpn_conn_upgrade` and `auth_alpn_conn_upgrade` provider attributes
+  (both default `auto`) give the delegated-join handshake and the post-join auth
+  client independent HTTPS connection-upgrade controls, separate from
+  `alpn_conn_upgrade` (which controls tunnels). Some topologies need different
+  values for each dial: behind an L4 load balancer with a private endpoint the
+  join handshake must not upgrade (it would verify the proxy's resolved private
+  IP and fail with a no-IP-SANs error) while the post-join auth client must be
+  ALPN-routed through the proxy. A working combination there is
+  `join_alpn_conn_upgrade = "no"` and `auth_alpn_conn_upgrade = "yes"`.
+  ([#5](https://github.com/cruxstack/terraform-provider-teleportconnect/issues/5))
+
 ## [0.2.4] - 2026-05-31
 
 ### Fixed
