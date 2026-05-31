@@ -5,12 +5,17 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/gravitational/teleport/api/constants"
+	"github.com/gravitational/teleport/api/utils"
 )
 
 func TestHostOnly(t *testing.T) {
@@ -62,6 +67,37 @@ func TestClusterNameFromCertErrors(t *testing.T) {
 	}
 	if _, err := clusterNameFromCert(issueTestCert(t, "")); err == nil {
 		t.Fatal("expected error for cert without cluster name")
+	}
+}
+
+func TestApplyProxyAuthRouting(t *testing.T) {
+	const cluster = "teleport.cluster.local"
+	cfg := &tls.Config{}
+	applyProxyAuthRouting(cfg, "proxy.example.com", cluster, nil, false)
+
+	if cfg.ServerName != "proxy.example.com" {
+		t.Fatalf("ServerName = %q, want proxy host", cfg.ServerName)
+	}
+	want := constants.ALPNSNIAuthProtocol + utils.EncodeClusterName(cluster)
+	if len(cfg.NextProtos) != 1 || cfg.NextProtos[0] != want {
+		t.Fatalf("NextProtos = %v, want [%q]", cfg.NextProtos, want)
+	}
+	if !strings.HasPrefix(cfg.NextProtos[0], "teleport-auth@") {
+		t.Fatalf("auth ALPN protocol missing: %q", cfg.NextProtos[0])
+	}
+	if cfg.InsecureSkipVerify {
+		t.Fatal("InsecureSkipVerify should be false when insecure=false")
+	}
+	if cfg.RootCAs == nil {
+		t.Fatal("RootCAs should be set when insecure=false")
+	}
+}
+
+func TestApplyProxyAuthRoutingInsecure(t *testing.T) {
+	cfg := &tls.Config{}
+	applyProxyAuthRouting(cfg, "proxy.example.com", "c", nil, true)
+	if !cfg.InsecureSkipVerify {
+		t.Fatal("InsecureSkipVerify should be true when insecure=true")
 	}
 }
 

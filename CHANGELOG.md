@@ -8,6 +8,18 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- Delegated join: the post-join API client now embeds the auth ALPN route and
+  proxy SNI directly in its TLS config so the connection terminates at the
+  proxy's public certificate and routes to auth via TLS routing. The v0.2.1 fix
+  relied on the SDK's `ALPNSNIAuthDialClusterName`, which on some proxy-fronted
+  topologies (e.g. an NLB + PrivateLink proxy with a separate auth load
+  balancer) still dialed the auth server directly and failed against the auth
+  server's internal certificate. This mirrors the working join-service and
+  database-tunnel dial paths.
+  ([#5](https://github.com/cruxstack/terraform-provider-teleportconnect/issues/5))
+
 ## [0.2.1] - 2026-05-31
 
 ### Fixed
