@@ -8,6 +8,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-31
+
 ### Fixed
 
 - Delegated-join (bot) identities now issue database and SSH certificates that
@@ -184,4 +186,5 @@ Initial public release.
 [0.2.2]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.2.1...v0.2.2
 [0.2.3]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.2.2...v0.2.3
 [0.2.4]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.2.3...v0.2.4
-[unreleased]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.2.4...HEAD
+[0.3.0]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.2.4...v0.3.0
+[unreleased]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.3.0...HEAD
