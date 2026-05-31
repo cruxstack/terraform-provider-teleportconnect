@@ -111,6 +111,13 @@ func TestResolveALPNUpgrade(t *testing.T) {
 	}
 }
 
+func TestProxyAuthDialerNonNil(t *testing.T) {
+	c := Config{ProxyAddress: "proxy.example.com:443", ALPNUpgrade: ALPNUpgradeNo}
+	if d := c.proxyAuthDialer(context.Background()); d == nil {
+		t.Fatal("proxyAuthDialer returned nil")
+	}
+}
+
 // issueTestCert mints a leaf cert signed by a CA whose Organization is
 // clusterName, mirroring how Teleport encodes the cluster in issued certs.
 func issueTestCert(t *testing.T, clusterName string) []byte {

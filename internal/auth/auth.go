@@ -113,12 +113,12 @@ func Build(ctx context.Context, c Config) (*client.Client, error) {
 		Context:                  ctx,
 	}
 
-	// The join path embeds the auth ALPN route and proxy SNI in the
-	// credentials' TLS config, so the connection terminates at the proxy's
-	// public cert and routes to auth via ALPN rather than dialing the auth
-	// server directly. Only the connection-upgrade flag is needed here.
-	if creds.routeThruProxy {
-		cfg.ALPNConnUpgradeRequired = creds.connUpgrade
+	// The join path pins an explicit ALPN dialer to the proxy so auth routes
+	// through it (verifying the proxy's public cert via the credentials' TLS
+	// config) and the SDK never falls back to dialing the auth server
+	// directly — which is unreachable on locked-down, proxy-only topologies.
+	if creds.dialer != nil {
+		cfg.Dialer = creds.dialer
 	}
 
 	clt, err := client.New(ctx, cfg)
@@ -128,12 +128,11 @@ func Build(ctx context.Context, c Config) (*client.Client, error) {
 	return clt, nil
 }
 
-// credentialSet is the SDK credentials plus, for the join path, the ALPN
-// connection-upgrade flag for routing auth through the proxy.
+// credentialSet is the SDK credentials plus, for the join path, an explicit
+// dialer pinned to the proxy (so there is no auth-server fallback).
 type credentialSet struct {
-	creds          []client.Credentials
-	routeThruProxy bool
-	connUpgrade    bool
+	creds  []client.Credentials
+	dialer client.ContextDialer
 }
 
 // credentials maps a Config to the Teleport SDK's credentials.

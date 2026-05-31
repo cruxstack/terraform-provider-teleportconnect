@@ -99,10 +99,25 @@ func (c Config) credentialsFromJoin(ctx context.Context) (credentialSet, error) 
 	applyProxyAuthRouting(tlsConfig, hostOnly(c.ProxyAddress), clusterName, certs.TLSCACerts, c.Insecure)
 
 	return credentialSet{
-		creds:          []tpclient.Credentials{tpclient.LoadTLS(tlsConfig)},
-		connUpgrade:    c.resolveALPNUpgrade(ctx),
-		routeThruProxy: true,
+		creds:  []tpclient.Credentials{tpclient.LoadTLS(tlsConfig)},
+		dialer: c.proxyAuthDialer(ctx),
 	}, nil
+}
+
+// proxyAuthDialer returns a dialer pinned to the proxy address for the
+// post-join auth client. Pinning an explicit dialer makes the SDK route auth
+// through the proxy and skip its auth-server fallback, which is unreachable on
+// proxy-only topologies. It returns a raw connection (optionally after the
+// ALPN HTTPS upgrade); the gRPC layer then performs the single TLS handshake
+// using the auth-routing credentials.
+func (c Config) proxyAuthDialer(ctx context.Context) tpclient.ContextDialer {
+	base := tpclient.NewDialer(ctx, 30*time.Second, 20*time.Second,
+		tpclient.WithInsecureSkipVerify(c.Insecure),
+		tpclient.WithALPNConnUpgrade(c.resolveALPNUpgrade(ctx)),
+	)
+	return tpclient.ContextDialerFunc(func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return base.DialContext(ctx, "tcp", c.ProxyAddress)
+	})
 }
 
 // applyProxyAuthRouting configures a join credential's TLS config to route auth

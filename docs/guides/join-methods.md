@@ -173,8 +173,14 @@ handled (no in-process renewal); split very long runs or raise the token TTL.
   named `TELEPORT_ID_TOKEN`, set `TELEPORT_GITLAB_ID_TOKEN_ENV`.
 - **`certificate is valid for ... not <proxy>` (auth server cert)** — the
   post-join client reached the auth server directly instead of routing through
-  the proxy. On proxies behind an L7 load balancer (e.g. AWS NLB + PrivateLink)
-  the upgrade probe is unreliable, so set `alpn_conn_upgrade = "yes"` on the
-  provider; the join/auth dials honor it as of v0.2.3.
+  the proxy. Fixed in v0.2.4+, which pins the post-join client to the proxy and
+  removes the auth-server fallback. Set `alpn_conn_upgrade` to match your LB:
+  `"no"` for an L4 NLB (the common case), `"yes"` for an L7 LB that needs the
+  HTTPS upgrade.
+- **`cannot validate certificate for <ip> ... no IP SANs` with
+  `alpn_conn_upgrade = "yes"`** — behind PrivateLink the proxy hostname
+  resolves to a private IP and the upstream connection-upgrade step verifies
+  against that IP. If your proxy is fronted by an L4 NLB the upgrade is not
+  needed; use `alpn_conn_upgrade = "no"`.
 - Run with `TF_LOG=DEBUG` to see the join method and audience the provider
   used.
