@@ -61,10 +61,12 @@ provider "teleportconnect" {
 ### Optional
 
 - `alpn_conn_upgrade` (String) Whether to perform an HTTPS connection upgrade for ALPN tunnels. Set to 'yes' when the Teleport proxy sits behind an L7 load balancer (AWS ALB, etc.) that terminates TLS with a public cert. 'no' to force direct TLS routing. 'auto' (default) probes the proxy and decides; the probe is unreliable for some LBs - prefer 'yes' if you know your proxy is fronted by one.
+- `auth_alpn_conn_upgrade` (String) HTTPS connection upgrade behavior for the post-join auth client (the authenticated API connection made after a successful join), independent of alpn_conn_upgrade (tunnels) and join_alpn_conn_upgrade. Defaults to 'auto'. Set to 'yes' when the auth connection must be ALPN-routed through the proxy (otherwise it can terminate against the internal auth certificate). The join handshake and the post-join auth dial can require opposite values on some topologies.
 - `cluster` (String) Optional leaf cluster name for trusted-cluster routing. Defaults to the cluster the proxy belongs to.
 - `identity_file_data` (String, Sensitive) Inline identity file contents (PEM bundle). Mutually exclusive with other auth modes.
 - `identity_file_path` (String) Path to an identity file produced by `tctl auth sign` or `tbot`. Mutually exclusive with other auth modes.
 - `insecure` (Boolean) Skip verification of the proxy TLS certificate (equivalent to `tsh --insecure`). Should never be true in production.
+- `join_alpn_conn_upgrade` (String) HTTPS connection upgrade behavior for the delegated-join handshake (the unauthenticated dial to the proxy's JoinService), independent of alpn_conn_upgrade (tunnels) and auth_alpn_conn_upgrade (post-join). Defaults to 'auto'. Set to 'no' when the proxy is behind an L4 load balancer with a private endpoint, where forcing the upgrade makes the join dial verify the proxy's resolved private IP and fail with a no-IP-SANs error.
 - `join_audience` (String) Expected audience claim of the identity token for join_method. Defaults to the proxy host. For GitHub this is requested explicitly; for other platforms it must match how the token is minted.
 - `join_method` (String) Delegated Machine ID join method for CI. The provider fetches the platform's OIDC/JWT identity token and joins the cluster in-process (no identity file or tbot sidecar). One of: github, gitlab, kubernetes, spacelift. Requires join_token. Mutually exclusive with the other auth modes.
 - `join_token` (String) Name of the Teleport join token to use with join_method.

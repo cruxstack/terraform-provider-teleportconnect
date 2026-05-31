@@ -3,6 +3,7 @@ package provider
 import (
 	"testing"
 
+	"github.com/cruxstack/terraform-provider-teleportconnect/internal/auth"
 	"github.com/cruxstack/terraform-provider-teleportconnect/internal/tunnel"
 )
 
@@ -118,6 +119,22 @@ func TestTunnelUpgradeMode(t *testing.T) {
 	for _, tt := range tests {
 		if got := tunnelUpgradeMode(tt.in); got != tt.want {
 			t.Fatalf("tunnelUpgradeMode(%v) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestAuthUpgradeMode(t *testing.T) {
+	tests := []struct {
+		in   ALPNConnUpgradeMode
+		want auth.ALPNUpgradeMode
+	}{
+		{ALPNAuto, auth.ALPNUpgradeAuto},
+		{ALPNYes, auth.ALPNUpgradeYes},
+		{ALPNNo, auth.ALPNUpgradeNo},
+	}
+	for _, tt := range tests {
+		if got := authUpgradeMode(tt.in); got != tt.want {
+			t.Fatalf("authUpgradeMode(%v) = %v, want %v", tt.in, got, tt.want)
 		}
 	}
 }

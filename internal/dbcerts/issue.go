@@ -19,6 +19,8 @@ import (
 	"github.com/gravitational/teleport/api/client/proto"
 	"github.com/gravitational/teleport/api/defaults"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
+
+	"github.com/cruxstack/terraform-provider-teleportconnect/internal/botroles"
 )
 
 // Request describes a single database certificate issuance.
@@ -68,10 +70,18 @@ func Issue(ctx context.Context, c *client.Client, req Request) (*Result, error) 
 		return nil, fmt.Errorf("fetching current user: %w", err)
 	}
 
+	// A bot identity must impersonate its configured roles for the issued cert
+	// to carry db access; a normal user gets nil (its own roles apply).
+	roleRequests, err := botroles.ImpersonatedRoles(ctx, c)
+	if err != nil {
+		return nil, fmt.Errorf("resolving impersonated roles: %w", err)
+	}
+
 	tflog.Debug(ctx, "generating ecdsa keypair for database certificate", map[string]any{
-		"database": req.Database,
-		"protocol": protocol,
-		"user":     tpUser.GetName(),
+		"database":      req.Database,
+		"protocol":      protocol,
+		"user":          tpUser.GetName(),
+		"role_requests": roleRequests,
 	})
 
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -85,11 +95,13 @@ func Issue(ctx context.Context, c *client.Client, req Request) (*Result, error) 
 	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})
 
 	certs, err := c.GenerateUserCerts(ctx, proto.UserCertsRequest{
-		Username:       tpUser.GetName(),
-		TLSPublicKey:   pubPEM,
-		Expires:        time.Now().Add(ttl),
-		Usage:          proto.UserCertsRequest_Database,
-		RouteToCluster: req.RouteToCluster,
+		Username:        tpUser.GetName(),
+		TLSPublicKey:    pubPEM,
+		Expires:         time.Now().Add(ttl),
+		Usage:           proto.UserCertsRequest_Database,
+		RouteToCluster:  req.RouteToCluster,
+		RoleRequests:    roleRequests,
+		UseRoleRequests: len(roleRequests) > 0,
 		RouteToDatabase: proto.RouteToDatabase{
 			ServiceName: req.Database,
 			Protocol:    protocol,

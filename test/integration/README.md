@@ -95,3 +95,16 @@ go test ./internal/provider/... -run TestAcc -v
 
 Tests whose required variables are unset are skipped, so a partial environment
 still runs a useful subset.
+
+## Delegated-join repro harness (optional)
+
+`internal/auth/repro_join_test.go` (build tag `reprojoin`) performs a real bot
+join via the static `token` method and then builds the post-join client exactly
+like `auth.Build` and calls `Ping`. It is the closest local reproduction of a
+proxy-fronted delegated join. It is excluded from normal builds, CI, and lint.
+
+To use it, register a bot token + bot on the cluster, then:
+
+```
+go test -tags reprojoin -run TestReproJoin -v ./internal/auth/
+```

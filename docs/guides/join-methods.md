@@ -172,15 +172,18 @@ handled (no in-process renewal); split very long runs or raise the token TTL.
 - **GitLab: no token found** — declare the `id_tokens` block and, if it is not
   named `TELEPORT_ID_TOKEN`, set `TELEPORT_GITLAB_ID_TOKEN_ENV`.
 - **`certificate is valid for ... not <proxy>` (auth server cert)** — the
-  post-join client reached the auth server directly instead of routing through
-  the proxy. Fixed in v0.2.4+, which pins the post-join client to the proxy and
-  removes the auth-server fallback. Set `alpn_conn_upgrade` to match your LB:
-  `"no"` for an L4 NLB (the common case), `"yes"` for an L7 LB that needs the
-  HTTPS upgrade.
-- **`cannot validate certificate for <ip> ... no IP SANs` with
-  `alpn_conn_upgrade = "yes"`** — behind PrivateLink the proxy hostname
-  resolves to a private IP and the upstream connection-upgrade step verifies
-  against that IP. If your proxy is fronted by an L4 NLB the upgrade is not
-  needed; use `alpn_conn_upgrade = "no"`.
+  post-join auth client reached the auth server directly instead of routing
+  through the proxy. Set `auth_alpn_conn_upgrade = "yes"` so the post-join
+  connection is ALPN-routed through the proxy.
+- **`cannot validate certificate for <ip> ... no IP SANs`** — the join
+  handshake's connection upgrade verified the proxy's resolved private IP
+  (common behind an L4 load balancer with a private endpoint). Set
+  `join_alpn_conn_upgrade = "no"`.
+- The join handshake (`join_alpn_conn_upgrade`), the post-join auth dial
+  (`auth_alpn_conn_upgrade`), and the tunnels (`alpn_conn_upgrade`) each have
+  an independent upgrade knob because some topologies need different values
+  for each. On an L4 LB + private endpoint, a working combination is
+  `join_alpn_conn_upgrade = "no"`, `auth_alpn_conn_upgrade = "yes"`, and
+  `alpn_conn_upgrade = "yes"` (the last only if you also use db tunnels).
 - Run with `TF_LOG=DEBUG` to see the join method and audience the provider
   used.

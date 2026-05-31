@@ -40,15 +40,21 @@ type Config struct {
 	JoinToken    string
 	JoinAudience string // expected aud claim; empty defaults to the proxy host
 
-	ALPNUpgrade ALPNUpgradeMode // applies to the join/auth dials
-	Insecure    bool            // disables proxy TLS verification; dev clusters only
+	// The join handshake and the post-join auth dial have independent
+	// connection-upgrade controls: some topologies need opposite values
+	// (e.g. an L4 LB + private endpoint where the join dial must not upgrade
+	// but the post-join dial must, see issue #5).
+	JoinALPNUpgrade ALPNUpgradeMode
+	AuthALPNUpgrade ALPNUpgradeMode
+
+	Insecure bool // disables proxy TLS verification; dev clusters only
 }
 
-// resolveALPNUpgrade decides whether the join/auth dials perform the HTTPS
-// connection upgrade: honor an explicit yes/no, else fall back to the probe
-// (which is unreliable behind some L7 LBs, hence the override).
-func (c Config) resolveALPNUpgrade(ctx context.Context) bool {
-	switch c.ALPNUpgrade {
+// resolveALPNUpgrade decides whether a dial performs the HTTPS connection
+// upgrade: honor an explicit yes/no, else fall back to the probe (which is
+// unreliable behind some L7 LBs, hence the override).
+func (c Config) resolveALPNUpgrade(ctx context.Context, mode ALPNUpgradeMode) bool {
+	switch mode {
 	case ALPNUpgradeYes:
 		return true
 	case ALPNUpgradeNo:
@@ -106,21 +112,22 @@ func Build(ctx context.Context, c Config) (*client.Client, error) {
 		return nil, err
 	}
 
+	// The join path builds its full client.Config via the same proxy-routing
+	// path tsh/tbot use (api/client/proxy), so use it as-is.
+	if creds.clientConfig != nil {
+		clt, err := client.New(ctx, *creds.clientConfig)
+		if err != nil {
+			return nil, fmt.Errorf("connecting to teleport proxy %s: %w", c.ProxyAddress, err)
+		}
+		return clt, nil
+	}
+
 	cfg := client.Config{
 		Addrs:                    []string{c.ProxyAddress},
 		Credentials:              creds.creds,
 		InsecureAddressDiscovery: c.Insecure,
 		Context:                  ctx,
 	}
-
-	// The join path pins an explicit ALPN dialer to the proxy so auth routes
-	// through it (verifying the proxy's public cert via the credentials' TLS
-	// config) and the SDK never falls back to dialing the auth server
-	// directly — which is unreachable on locked-down, proxy-only topologies.
-	if creds.dialer != nil {
-		cfg.Dialer = creds.dialer
-	}
-
 	clt, err := client.New(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to teleport proxy %s: %w", c.ProxyAddress, err)
@@ -128,11 +135,12 @@ func Build(ctx context.Context, c Config) (*client.Client, error) {
 	return clt, nil
 }
 
-// credentialSet is the SDK credentials plus, for the join path, an explicit
-// dialer pinned to the proxy (so there is no auth-server fallback).
+// credentialSet is either plain SDK credentials (identity-file / local-profile
+// modes) or, for the join path, a fully-built client.Config that routes auth
+// through the proxy the same way tsh/tbot do.
 type credentialSet struct {
-	creds  []client.Credentials
-	dialer client.ContextDialer
+	creds        []client.Credentials
+	clientConfig *client.Config
 }
 
 // credentials maps a Config to the Teleport SDK's credentials.
