@@ -132,8 +132,8 @@ func TestCredentialsSelectsMode(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if len(creds) != 1 {
-				t.Fatalf("expected exactly one credential, got %d", len(creds))
+			if len(creds.creds) != 1 {
+				t.Fatalf("expected exactly one credential, got %d", len(creds.creds))
 			}
 		})
 	}

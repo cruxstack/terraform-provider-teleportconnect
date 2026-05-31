@@ -8,6 +8,18 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- Delegated join (`join_method` + `join_token`) now routes the post-join API
+  client through the proxy via ALPN-SNI auth dial, so TLS verifies against the
+  proxy's public certificate instead of the cluster identity. Previously the
+  join handshake succeeded but the subsequent client connection failed against
+  proxy-fronted clusters (TLS routing, public proxy cert) with an SNI mismatch
+  (`certificate is valid for <proxy>, not <cluster>`). The cluster name is
+  derived automatically from the issued certificate; no new configuration is
+  required.
+  ([#5](https://github.com/cruxstack/terraform-provider-teleportconnect/issues/5))
+
 ## [0.2.0] - 2026-05-30
 
 ### Added

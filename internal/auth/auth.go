@@ -83,9 +83,17 @@ func Build(ctx context.Context, c Config) (*client.Client, error) {
 
 	cfg := client.Config{
 		Addrs:                    []string{c.ProxyAddress},
-		Credentials:              creds,
+		Credentials:              creds.creds,
 		InsecureAddressDiscovery: c.Insecure,
 		Context:                  ctx,
+	}
+
+	// The join path issues a cluster-scoped cert; route auth through the
+	// proxy via ALPN/SNI so TLS verifies against the proxy's public cert
+	// rather than the cluster identity.
+	if creds.clusterName != "" {
+		cfg.ALPNSNIAuthDialClusterName = creds.clusterName
+		cfg.ALPNConnUpgradeRequired = client.IsALPNConnUpgradeRequired(ctx, c.ProxyAddress, c.Insecure)
 	}
 
 	clt, err := client.New(ctx, cfg)
@@ -95,23 +103,30 @@ func Build(ctx context.Context, c Config) (*client.Client, error) {
 	return clt, nil
 }
 
-// credentials maps a Config to the Teleport SDK's Credentials slice.
-func (c Config) credentials(ctx context.Context) ([]client.Credentials, error) {
+// credentialSet is the SDK credentials plus, for the join path, the cluster
+// name needed for ALPN-SNI auth routing.
+type credentialSet struct {
+	creds       []client.Credentials
+	clusterName string
+}
+
+// credentials maps a Config to the Teleport SDK's credentials.
+func (c Config) credentials(ctx context.Context) (credentialSet, error) {
 	switch {
 	case c.UseLocalProfile:
 		// Empty dir => SDK default ~/.tsh, matched by the proxy host.
-		return []client.Credentials{client.LoadProfile("", profileNameFromProxy(c.ProxyAddress))}, nil
+		return credentialSet{creds: []client.Credentials{client.LoadProfile("", profileNameFromProxy(c.ProxyAddress))}}, nil
 
 	case c.IdentityFilePath != "":
-		return []client.Credentials{client.LoadIdentityFile(c.IdentityFilePath)}, nil
+		return credentialSet{creds: []client.Credentials{client.LoadIdentityFile(c.IdentityFilePath)}}, nil
 
 	case c.IdentityFileData != "":
-		return []client.Credentials{client.LoadIdentityFileFromString(c.IdentityFileData)}, nil
+		return credentialSet{creds: []client.Credentials{client.LoadIdentityFileFromString(c.IdentityFileData)}}, nil
 
 	case c.JoinMethod != "":
 		return c.credentialsFromJoin(ctx)
 	}
-	return nil, errors.New("no credentials configured")
+	return credentialSet{}, errors.New("no credentials configured")
 }
 
 // profileNameFromProxy returns the host portion of addr, which is how ~/.tsh

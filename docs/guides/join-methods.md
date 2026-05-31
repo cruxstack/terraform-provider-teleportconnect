@@ -171,5 +171,8 @@ handled (no in-process renewal); split very long runs or raise the token TTL.
   `permissions: id-token: write` to the job.
 - **GitLab: no token found** — declare the `id_tokens` block and, if it is not
   named `TELEPORT_ID_TOKEN`, set `TELEPORT_GITLAB_ID_TOKEN_ENV`.
+- **`certificate is valid for <proxy>, not <cluster>`** — fixed in v0.2.1+.
+  The post-join client now routes through the proxy via ALPN-SNI; upgrade the
+  provider if you hit this on a proxy-fronted cluster.
 - Run with `TF_LOG=DEBUG` to see the join method and audience the provider
   used.
