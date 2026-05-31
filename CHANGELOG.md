@@ -8,6 +8,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-05-31
+
 ### Fixed
 
 - Delegated join: the post-join API client is now pinned to an explicit dialer
@@ -145,4 +147,5 @@ Initial public release.
 [0.2.1]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.2.1...v0.2.2
 [0.2.3]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.2.2...v0.2.3
-[unreleased]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.2.3...HEAD
+[0.2.4]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.2.3...v0.2.4
+[unreleased]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.2.4...HEAD
