@@ -8,6 +8,26 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- Delegated join: the post-join API client is now pinned to an explicit dialer
+  that routes through the proxy, instead of being given the proxy as an `Addrs`
+  entry. With `Addrs`, the Teleport SDK could fall back to dialing the auth
+  server directly, which fails (or is unreachable) on proxy-only topologies
+  where the auth service is internal — surfacing as a TLS error against the auth
+  server's internal certificate (`*.teleport.cluster.local`). The pinned dialer
+  removes that fallback and honors `alpn_conn_upgrade`.
+  ([#5](https://github.com/cruxstack/terraform-provider-teleportconnect/issues/5))
+
+### Known limitations
+
+- On proxies behind an L7 load balancer that also require PrivateLink (so the
+  proxy hostname resolves to a private IP), forcing `alpn_conn_upgrade = "yes"`
+  can fail the join with an IP-SAN error: the upstream SDK's connection-upgrade
+  step infers the TLS server name from the resolved address. For an L4 NLB the
+  upgrade is unnecessary, so `alpn_conn_upgrade = "no"` is the correct setting
+  there.
+
 ## [0.2.3] - 2026-05-31
 
 ### Fixed
