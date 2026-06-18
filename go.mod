@@ -1,6 +1,6 @@
 module github.com/cruxstack/terraform-provider-teleportconnect
 
-go 1.26.3
+go 1.26.4
 
 require (
 	github.com/gravitational/teleport/api v0.0.0-20260522151207-2baa4e20f8cd
