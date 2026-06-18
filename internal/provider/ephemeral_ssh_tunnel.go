@@ -114,8 +114,8 @@ func (e *ephemeralSSHTunnel) Open(ctx context.Context, req ephemeral.OpenRequest
 		return
 	}
 
-	if e.pd == nil || e.pd.Client == nil {
-		resp.Diagnostics.AddError("Provider not configured", "Provider client is nil. This is a bug in the provider.")
+	if e.pd == nil {
+		resp.Diagnostics.AddError("Provider not configured", "ProviderData is nil. This is a bug in the provider.")
 		return
 	}
 
@@ -137,10 +137,20 @@ func (e *ephemeralSSHTunnel) Open(ctx context.Context, req ephemeral.OpenRequest
 		}
 		ttl = d
 	}
-	routeCluster := stringOrDefault(data.Cluster.ValueString(), e.pd.Cluster)
+	clt, err := e.pd.Client(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to connect to Teleport", err.Error())
+		return
+	}
 	// DialHost needs a concrete cluster; an empty one 403s, so fall back to
 	// the proxy's own cluster.
-	dialCluster := stringOrDefault(routeCluster, e.pd.ClusterName)
+	clusterName, err := e.pd.ClusterName(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to connect to Teleport", err.Error())
+		return
+	}
+	routeCluster := stringOrDefault(data.Cluster.ValueString(), e.pd.Cluster)
+	dialCluster := stringOrDefault(routeCluster, clusterName)
 
 	tflog.Info(ctx, "issuing ssh certificate", map[string]any{
 		"gateway_node": gateway,
@@ -148,7 +158,7 @@ func (e *ephemeralSSHTunnel) Open(ctx context.Context, req ephemeral.OpenRequest
 		"target":       fmt.Sprintf("%s:%d", targetHost, targetPort),
 	})
 
-	cred, err := sshcerts.Issue(ctx, e.pd.Client, sshcerts.Request{
+	cred, err := sshcerts.Issue(ctx, clt, sshcerts.Request{
 		NodeName:       gateway,
 		SSHLogin:       sshLogin,
 		TTL:            ttl,
@@ -169,7 +179,7 @@ func (e *ephemeralSSHTunnel) Open(ctx context.Context, req ephemeral.OpenRequest
 		SSHCert:      cred.SSHCert,
 		PrivateKey:   cred.PrivateKey,
 		SSHCAs:       cred.SSHCAs,
-		TLSConfig:    e.pd.Client.Config(),
+		TLSConfig:    clt.Config(),
 		Insecure:     e.pd.Insecure,
 		ALPNUpgrade:  tunnelUpgradeMode(e.pd.ALPNConnUpgrade),
 	})

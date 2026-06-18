@@ -130,8 +130,8 @@ func (e *ephemeralDBTunnel) Open(ctx context.Context, req ephemeral.OpenRequest,
 		return
 	}
 
-	if e.pd == nil || e.pd.Client == nil {
-		resp.Diagnostics.AddError("Provider not configured", "Provider client is nil. This is a bug in the provider.")
+	if e.pd == nil {
+		resp.Diagnostics.AddError("Provider not configured", "ProviderData is nil. This is a bug in the provider.")
 		return
 	}
 
@@ -158,7 +158,13 @@ func (e *ephemeralDBTunnel) Open(ctx context.Context, req ephemeral.OpenRequest,
 		"db_name":  data.DBName.ValueString(),
 	})
 
-	cred, err := dbcerts.Issue(ctx, e.pd.Client, dbcerts.Request{
+	clt, err := e.pd.Client(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to connect to Teleport", err.Error())
+		return
+	}
+
+	cred, err := dbcerts.Issue(ctx, clt, dbcerts.Request{
 		Database:       dbName,
 		Protocol:       data.Protocol.ValueString(),
 		DBUser:         data.DBUser.ValueString(),

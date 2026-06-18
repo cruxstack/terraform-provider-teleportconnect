@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 
 	"github.com/gravitational/teleport/api/client"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -51,19 +52,94 @@ const (
 )
 
 // ProviderData is shared with every resource, data source, and ephemeral
-// resource via the framework's *Data fields.
+// resource via the framework's *Data fields. It only caches configuration at
+// Configure time; the Teleport connection is established lazily on first use
+// via Client, so an unused provider block performs no network or file I/O at
+// plan time (see issue #17).
 type ProviderData struct {
-	Client       *client.Client
-	ProxyAddress string
-	Cluster      string // leaf-cluster override for cert RouteToCluster; may be empty
-	// ClusterName is the proxy's own cluster, resolved from Ping. SSH
-	// DialHost needs a concrete cluster, so it falls back to this.
-	ClusterName     string
+	ProxyAddress    string
+	Cluster         string // leaf-cluster override for cert RouteToCluster; may be empty
 	ALPNConnUpgrade ALPNConnUpgradeMode
 	Insecure        bool
 	// Tunnels tracks listeners that must outlive a single Open call, until
 	// Close fires or the plugin process exits.
 	Tunnels *TunnelRegistry
+
+	// authCfg is the resolved auth configuration used to build the client.
+	authCfg auth.Config
+
+	// mu guards the lazy-connect state below. The first Client call dials
+	// (or joins) and pings; the result - client, clusterName, or error - is
+	// cached so later resources reuse it and a failed connect is not retried.
+	mu          sync.Mutex
+	connected   bool
+	client      *client.Client
+	clusterName string // proxy's own cluster, resolved from Ping (SSH DialHost fallback)
+	connErr     error
+}
+
+// Client returns the authenticated Teleport client, connecting on first call
+// and caching the result. A failed connect is cached too, so an unreachable
+// proxy is not redialed by every resource in the same run.
+func (pd *ProviderData) Client(ctx context.Context) (*client.Client, error) {
+	pd.mu.Lock()
+	defer pd.mu.Unlock()
+	if pd.connected {
+		return pd.client, pd.connErr
+	}
+	pd.connected = true
+
+	tflog.Info(ctx, "connecting to teleport proxy", map[string]any{
+		"proxy_address":     pd.authCfg.ProxyAddress,
+		"cluster":           pd.authCfg.Cluster,
+		"use_local_profile": pd.authCfg.UseLocalProfile,
+		"identity_file":     pd.authCfg.IdentityFilePath != "" || pd.authCfg.IdentityFileData != "",
+		"join_method":       pd.authCfg.JoinMethod,
+	})
+
+	clt, err := auth.Build(ctx, pd.authCfg)
+	if err != nil {
+		pd.connErr = fmt.Errorf("failed to connect to Teleport: %w", err)
+		return nil, pd.connErr
+	}
+
+	// Ping confirms the credentials work and resolves the proxy's own
+	// cluster name (the SSH DialHost fallback).
+	pi, err := clt.Ping(ctx)
+	if err != nil {
+		_ = clt.Close()
+		pd.connErr = fmt.Errorf("teleport ping failed: %w", err)
+		return nil, pd.connErr
+	}
+	tflog.Info(ctx, "teleport connection established", map[string]any{
+		"cluster_name":   pi.ClusterName,
+		"server_version": pi.ServerVersion,
+	})
+
+	pd.client = clt
+	pd.clusterName = pi.ClusterName
+	return pd.client, nil
+}
+
+// ClusterName ensures the client is connected and returns the proxy's own
+// cluster name, used as the SSH DialHost cluster fallback.
+func (pd *ProviderData) ClusterName(ctx context.Context) (string, error) {
+	if _, err := pd.Client(ctx); err != nil {
+		return "", err
+	}
+	pd.mu.Lock()
+	defer pd.mu.Unlock()
+	return pd.clusterName, nil
+}
+
+// Close tears down the cached client if one was established.
+func (pd *ProviderData) Close() error {
+	pd.mu.Lock()
+	defer pd.mu.Unlock()
+	if pd.client != nil {
+		return pd.client.Close()
+	}
+	return nil
 }
 
 // providerModel mirrors the HCL schema. types.* fields distinguish unset from
@@ -81,6 +157,7 @@ type providerModel struct {
 	ALPNConnUpgrade     types.String `tfsdk:"alpn_conn_upgrade"`
 	JoinALPNConnUpgrade types.String `tfsdk:"join_alpn_conn_upgrade"`
 	AuthALPNConnUpgrade types.String `tfsdk:"auth_alpn_conn_upgrade"`
+	EagerConnect        types.Bool   `tfsdk:"eager_connect"`
 }
 
 func (p *teleportconnectProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -140,6 +217,10 @@ func (p *teleportconnectProvider) Schema(_ context.Context, _ provider.SchemaReq
 			"auth_alpn_conn_upgrade": schema.StringAttribute{
 				Optional:    true,
 				Description: "HTTPS connection upgrade behavior for the post-join auth client (the authenticated API connection made after a successful join), independent of alpn_conn_upgrade (tunnels) and join_alpn_conn_upgrade. Defaults to 'auto'. Set to 'yes' when the auth connection must be ALPN-routed through the proxy (otherwise it can terminate against the internal auth certificate). The join handshake and the post-join auth dial can require opposite values on some topologies.",
+			},
+			"eager_connect": schema.BoolAttribute{
+				Optional:    true,
+				Description: "If true, connect to and ping the Teleport proxy during provider configuration (legacy behavior, fails fast at configure time). Defaults to false, where the connection is established lazily on first resource/data-source use, so an unused provider block (e.g. a count = 0 ephemeral) does not require cluster reachability at plan time.",
 			},
 		},
 	}
@@ -226,43 +307,24 @@ func (p *teleportconnectProvider) Configure(ctx context.Context, req provider.Co
 		return
 	}
 
-	tflog.Info(ctx, "connecting to teleport proxy", map[string]any{
-		"proxy_address":     authCfg.ProxyAddress,
-		"cluster":           authCfg.Cluster,
-		"use_local_profile": authCfg.UseLocalProfile,
-		"identity_file":     authCfg.IdentityFilePath != "" || authCfg.IdentityFileData != "",
-		"join_method":       authCfg.JoinMethod,
-	})
-
-	clt, err := auth.Build(ctx, authCfg)
-	if err != nil {
-		resp.Diagnostics.AddError("Failed to connect to Teleport", err.Error())
-		return
-	}
-
-	// Ping confirms the credentials work now, not at first resource read.
-	pi, err := clt.Ping(ctx)
-	if err != nil {
-		_ = clt.Close()
-		resp.Diagnostics.AddError(
-			"Teleport ping failed",
-			fmt.Sprintf("client.Ping returned: %v", err),
-		)
-		return
-	}
-	tflog.Info(ctx, "teleport connection established", map[string]any{
-		"cluster_name":   pi.ClusterName,
-		"server_version": pi.ServerVersion,
-	})
-
+	// The connection is established lazily on first use (see ProviderData.Client)
+	// so an unused provider block performs no I/O at plan time.
 	pd := &ProviderData{
-		Client:          clt,
 		ProxyAddress:    authCfg.ProxyAddress,
 		Cluster:         authCfg.Cluster,
-		ClusterName:     pi.ClusterName,
 		ALPNConnUpgrade: upgradeMode,
 		Insecure:        authCfg.Insecure,
 		Tunnels:         NewTunnelRegistry(),
+		authCfg:         authCfg,
+	}
+
+	// eager_connect restores the legacy behavior of dialing and pinging at
+	// configure time, failing fast before any resource runs.
+	if cfg.EagerConnect.ValueBool() {
+		if _, err := pd.Client(ctx); err != nil {
+			resp.Diagnostics.AddError("Failed to connect to Teleport", err.Error())
+			return
+		}
 	}
 
 	resp.ResourceData = pd
