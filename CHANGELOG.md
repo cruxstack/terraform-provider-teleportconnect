@@ -8,6 +8,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-06-18
+
 ### Fixed
 
 - The provider no longer connects to Teleport during provider configuration. The
@@ -203,4 +205,5 @@ Initial public release.
 [0.2.3]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.2.2...v0.2.3
 [0.2.4]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.2.3...v0.2.4
 [0.3.0]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.2.4...v0.3.0
-[unreleased]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.3.0...HEAD
+[0.3.1]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.3.0...v0.3.1
+[unreleased]: https://github.com/cruxstack/terraform-provider-teleportconnect/compare/v0.3.1...HEAD
