@@ -8,6 +8,22 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- The provider no longer connects to Teleport during provider configuration. The
+  join/dial and ping now happen lazily on first resource or data-source use, so
+  a declared-but-unused provider block (e.g. a `count = 0` ephemeral with no
+  other consumers) no longer fails `plan` in environments that cannot reach the
+  cluster. This matches the lazy-connect behavior of providers like
+  `cyrilgdn/postgresql`, `hashicorp/kubernetes`, and `hashicorp/vault` (issue
+  #17).
+
+### Added
+
+- `eager_connect` provider attribute (default `false`). Set to `true` to restore
+  the previous behavior of connecting and pinging the proxy at configure time,
+  failing fast before any resource runs.
+
 ## [0.3.0] - 2026-05-31
 
 ### Fixed

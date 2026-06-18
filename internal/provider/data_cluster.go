@@ -75,20 +75,26 @@ func (d *dataCluster) Configure(_ context.Context, req datasource.ConfigureReque
 }
 
 func (d *dataCluster) Read(ctx context.Context, _ datasource.ReadRequest, resp *datasource.ReadResponse) {
-	if d.pd == nil || d.pd.Client == nil {
-		resp.Diagnostics.AddError("Provider not configured", "Provider client is nil. This is a bug in the provider.")
+	if d.pd == nil {
+		resp.Diagnostics.AddError("Provider not configured", "ProviderData is nil. This is a bug in the provider.")
 		return
 	}
 
 	tflog.Debug(ctx, "reading teleport cluster metadata")
 
-	pi, err := d.pd.Client.Ping(ctx)
+	clt, err := d.pd.Client(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to connect to Teleport", err.Error())
+		return
+	}
+
+	pi, err := clt.Ping(ctx)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to ping Teleport", err.Error())
 		return
 	}
 
-	caResp, err := d.pd.Client.GetClusterCACert(ctx)
+	caResp, err := clt.GetClusterCACert(ctx)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to fetch cluster CA", err.Error())
 		return

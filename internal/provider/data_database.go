@@ -101,8 +101,8 @@ func (d *dataDatabase) Read(ctx context.Context, req datasource.ReadRequest, res
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if d.pd == nil || d.pd.Client == nil {
-		resp.Diagnostics.AddError("Provider not configured", "Provider client is nil. This is a bug in the provider.")
+	if d.pd == nil {
+		resp.Diagnostics.AddError("Provider not configured", "ProviderData is nil. This is a bug in the provider.")
 		return
 	}
 
@@ -127,7 +127,13 @@ func (d *dataDatabase) Read(ctx context.Context, req datasource.ReadRequest, res
 		"labels": wantLabels,
 	})
 
-	servers, err := d.pd.Client.GetDatabaseServers(ctx, defaults.Namespace)
+	clt, err := d.pd.Client(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to connect to Teleport", err.Error())
+		return
+	}
+
+	servers, err := clt.GetDatabaseServers(ctx, defaults.Namespace)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to list database servers", err.Error())
 		return

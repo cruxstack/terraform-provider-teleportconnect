@@ -126,10 +126,10 @@ func (e *ephemeralDBCertificate) Open(ctx context.Context, req ephemeral.OpenReq
 		return
 	}
 
-	if e.pd == nil || e.pd.Client == nil {
+	if e.pd == nil {
 		resp.Diagnostics.AddError(
 			"Provider not configured",
-			"Provider client is nil. This is a bug in the provider.",
+			"ProviderData is nil. This is a bug in the provider.",
 		)
 		return
 	}
@@ -157,7 +157,13 @@ func (e *ephemeralDBCertificate) Open(ctx context.Context, req ephemeral.OpenReq
 		"db_name":  data.DBName.ValueString(),
 	})
 
-	res, err := dbcerts.Issue(ctx, e.pd.Client, dbcerts.Request{
+	clt, err := e.pd.Client(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to connect to Teleport", err.Error())
+		return
+	}
+
+	res, err := dbcerts.Issue(ctx, clt, dbcerts.Request{
 		Database:       dbName,
 		Protocol:       data.Protocol.ValueString(),
 		DBUser:         data.DBUser.ValueString(),
